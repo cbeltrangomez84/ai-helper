@@ -44,6 +44,28 @@ export default function Home() {
     }
   }, [resetClient])
 
+  useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) {
+      return
+    }
+
+    let isMounted = true
+    navigator.serviceWorker
+      .register("/sw.js", { scope: "/" })
+      .then((registration) => {
+        if (isMounted) {
+          console.info("Service worker registered:", registration.scope)
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to register service worker", error)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
   const sendToBackend = useCallback(async (text: string) => {
     try {
       const response = await fetch("/api/wispr", {
