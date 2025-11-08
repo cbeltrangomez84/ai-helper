@@ -10,6 +10,7 @@ export default function Home() {
   const [status, setStatus] = useState("Ready to capture speech with Wispr")
   const [transcript, setTranscript] = useState("")
   const [mode, setMode] = useState<Mode>("idle")
+  const [formattedOutput, setFormattedOutput] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const clientRef = useRef<WisprFlowClient | null>(null)
@@ -25,22 +26,37 @@ export default function Home() {
     }
   }, [resetClient])
 
-  const sendToBackend = useCallback(async (text: string) => {
-    try {
-      await fetch("/api/wispr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      })
-    } catch (error) {
-      console.error("Failed to notify backend", error)
-    }
-  }, [])
+  const sendToBackend = useCallback(
+    async (text: string) => {
+      try {
+        const response = await fetch("/api/wispr", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(errorText || "The backend did not accept the transcription.")
+        }
+
+        const payload: { formatted?: string | null } = await response.json()
+        setFormattedOutput(payload.formatted ?? null)
+      } catch (error) {
+        console.error("Failed to notify backend", error)
+        const message = error instanceof Error ? error.message : "Unable to contact the backend."
+        setErrorMessage(message)
+        setStatus(message)
+      }
+    },
+    [setErrorMessage, setFormattedOutput, setStatus]
+  )
 
   const startSession = useCallback(async () => {
     resetClient()
     setErrorMessage(null)
     setTranscript("")
+    setFormattedOutput(null)
 
     const client = new WisprFlowClient({
       onStatus: (message) => setStatus(message),
@@ -80,7 +96,7 @@ export default function Home() {
       if (finalText) {
         setTranscript(finalText)
         await sendToBackend(finalText)
-        setStatus("Final transcript delivered to the backend.")
+        setStatus("Final transcript delivered to the backend and formatted.")
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not complete the Wispr transcription."
@@ -132,6 +148,12 @@ export default function Home() {
         <div className="mt-6 min-h-[120px] rounded-2xl border border-zinc-200 bg-zinc-100/70 p-4 text-sm text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-100">
           {transcript ? <p className="whitespace-pre-wrap leading-relaxed">{transcript}</p> : <p className="text-zinc-500 dark:text-zinc-400">Live transcription will appear here.</p>}
         </div>
+        {formattedOutput && (
+          <div className="mt-6 rounded-2xl border border-indigo-300 bg-indigo-50 p-4 text-sm leading-relaxed text-zinc-900 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-50">
+            <h2 className="mb-2 text-base font-semibold text-indigo-600 dark:text-indigo-300">ChatGPT formatted output</h2>
+            <pre className="whitespace-pre-wrap font-sans text-sm text-zinc-800 dark:text-indigo-50">{formattedOutput}</pre>
+          </div>
+        )}
       </div>
     </main>
   )
