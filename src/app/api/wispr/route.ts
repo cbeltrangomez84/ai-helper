@@ -12,8 +12,43 @@ type OpenAIChatResponse = {
   }>
 }
 
+type ChatGPTSections = {
+  title: string
+  objective: string
+  acceptanceCriteria: string
+  formatted: string
+}
+
 const PROMPT_INSTRUCTIONS =
-  "Format this so it has 2 titles (Objective and Acceptance Criteria using bullets), also check grammar and spelling. Everything should be written in English in md format using ## for every title"
+  "Rewrite the provided content so it becomes a task specification in Markdown with three sections using `##` headings: Title, Objective, and Acceptance Criteria. The Title section must contain a single concise line. The Objective section should be a short paragraph. The Acceptance Criteria section must be a bullet list (use `-`). Fix grammar and spelling. Always respond in English."
+
+function extractSections(markdown: string): ChatGPTSections {
+  const matches = markdown.matchAll(/^##\s+([^\n]+)\n([\s\S]*?)(?=^##\s+|\s*$)/gim)
+  const sections: Record<string, string> = {}
+
+  for (const match of matches) {
+    const key = match[1]?.trim().toLowerCase()
+    const value = match[2]?.trim() ?? ""
+    if (key) {
+      sections[key] = value
+    }
+  }
+
+  const title = sections["title"] ?? ""
+  const objective = sections["objective"] ?? ""
+  const acceptanceCriteria = sections["acceptance criteria"] ?? ""
+
+  return {
+    title,
+    objective,
+    acceptanceCriteria,
+    formatted: markdown.trim(),
+  }
+}
+
+function buildChatGPTPrompt(content: string) {
+  return `${PROMPT_INSTRUCTIONS}\n\nContent to format:\n${content.trim()}`
+}
 
 export async function POST(request: NextRequest) {
   const { text }: Payload = await request.json()
@@ -42,7 +77,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const prompt = `${PROMPT_INSTRUCTIONS}\n\nContent to format:\n${text.trim()}`
+  const prompt = buildChatGPTPrompt(text)
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -82,12 +117,28 @@ export async function POST(request: NextRequest) {
     const data = (await response.json()) as OpenAIChatResponse
     const formatted = data.choices?.[0]?.message?.content?.trim() ?? ""
 
-    console.log("[Wispr Flow] ChatGPT output:", formatted || "<empty response>")
+    if (!formatted) {
+      console.error("[Wispr Flow] ChatGPT returned an empty response.")
+      return NextResponse.json(
+        {
+          ok: false,
+          message: "ChatGPT returned an empty response.",
+        },
+        { status: 502 }
+      )
+    }
+
+    const sections = extractSections(formatted)
+
+    console.log("[Wispr Flow] ChatGPT output:", sections.formatted || "<empty response>")
 
     return NextResponse.json({
       ok: true,
       received: text,
-      formatted,
+      formatted: sections.formatted,
+      title: sections.title,
+      objective: sections.objective,
+      acceptanceCriteria: sections.acceptanceCriteria,
     })
   } catch (error) {
     console.error("[Wispr Flow] Unexpected error calling ChatGPT:", error)

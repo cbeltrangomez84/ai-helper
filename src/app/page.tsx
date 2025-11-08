@@ -6,11 +6,29 @@ import { WisprFlowClient } from "@/lib/wisprFlowClient"
 
 type Mode = "idle" | "recording" | "finalizing"
 
+type TaskDraft = {
+  title: string
+  objective: string
+  acceptanceCriteria: string
+  formatted: string
+}
+
+type CreatedTask = {
+  id?: string
+  name?: string
+  publicId?: string | null
+  url?: string
+  listId?: string
+}
+
 export default function Home() {
   const [status, setStatus] = useState("Ready to capture speech with Wispr")
   const [transcript, setTranscript] = useState("")
   const [mode, setMode] = useState<Mode>("idle")
   const [formattedOutput, setFormattedOutput] = useState<string | null>(null)
+  const [taskDraft, setTaskDraft] = useState<TaskDraft | null>(null)
+  const [taskInfo, setTaskInfo] = useState<CreatedTask | null>(null)
+  const [isCreatingTask, setIsCreatingTask] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const clientRef = useRef<WisprFlowClient | null>(null)
@@ -26,37 +44,51 @@ export default function Home() {
     }
   }, [resetClient])
 
-  const sendToBackend = useCallback(
-    async (text: string) => {
-      try {
-        const response = await fetch("/api/wispr", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-        })
+  const sendToBackend = useCallback(async (text: string) => {
+    try {
+      const response = await fetch("/api/wispr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      })
 
-        if (!response.ok) {
-          const errorText = await response.text()
-          throw new Error(errorText || "The backend did not accept the transcription.")
-        }
-
-        const payload: { formatted?: string | null } = await response.json()
-        setFormattedOutput(payload.formatted ?? null)
-      } catch (error) {
-        console.error("Failed to notify backend", error)
-        const message = error instanceof Error ? error.message : "Unable to contact the backend."
-        setErrorMessage(message)
-        setStatus(message)
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(errorText || "The backend did not accept the transcription.")
       }
-    },
-    [setErrorMessage, setFormattedOutput, setStatus]
-  )
+
+      const payload: {
+        formatted?: string | null
+        title?: string
+        objective?: string
+        acceptanceCriteria?: string
+      } = await response.json()
+
+      setFormattedOutput(payload.formatted ?? null)
+      setTaskDraft({
+        title: payload.title?.trim() ?? "",
+        objective: payload.objective?.trim() ?? "",
+        acceptanceCriteria: payload.acceptanceCriteria?.trim() ?? "",
+        formatted: payload.formatted?.trim() ?? "",
+      })
+      setTaskInfo(null)
+      setErrorMessage(null)
+      setStatus("Final transcript delivered to the backend and formatted.")
+    } catch (error) {
+      console.error("Failed to notify backend", error)
+      const message = error instanceof Error ? error.message : "Unable to contact the backend."
+      setErrorMessage(message)
+      setStatus(message)
+    }
+  }, [])
 
   const startSession = useCallback(async () => {
     resetClient()
     setErrorMessage(null)
     setTranscript("")
     setFormattedOutput(null)
+    setTaskDraft(null)
+    setTaskInfo(null)
 
     const client = new WisprFlowClient({
       onStatus: (message) => setStatus(message),
@@ -96,7 +128,6 @@ export default function Home() {
       if (finalText) {
         setTranscript(finalText)
         await sendToBackend(finalText)
-        setStatus("Final transcript delivered to the backend and formatted.")
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not complete the Wispr transcription."
@@ -120,10 +151,65 @@ export default function Home() {
 
   const isButtonDisabled = mode === "finalizing"
 
+  const handleStartOver = useCallback(() => {
+    resetClient()
+    setMode("idle")
+    setStatus("Ready to capture speech with Wispr")
+    setTranscript("")
+    setFormattedOutput(null)
+    setTaskDraft(null)
+    setTaskInfo(null)
+    setErrorMessage(null)
+  }, [resetClient])
+
+  const handleCreateTask = useCallback(async () => {
+    if (!taskDraft?.title || !taskDraft.objective) {
+      setErrorMessage("The formatted content is missing a title or objective. Please try again.")
+      return
+    }
+
+    setIsCreatingTask(true)
+    setErrorMessage(null)
+    setTaskInfo(null)
+    setStatus("Creating task in ClickUp...")
+
+    try {
+      const response = await fetch("/api/clickup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: taskDraft.title,
+          objective: taskDraft.objective,
+          acceptanceCriteria: taskDraft.acceptanceCriteria,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(errorText || "ClickUp did not accept the task request.")
+      }
+
+      const payload: { task?: CreatedTask } = await response.json()
+      if (!payload.task) {
+        throw new Error("ClickUp did not return task details.")
+      }
+
+      setTaskInfo(payload.task)
+      setStatus("Task created successfully in ClickUp.")
+    } catch (error) {
+      console.error("Failed to create ClickUp task", error)
+      const message = error instanceof Error ? error.message : "Unable to create the task in ClickUp."
+      setErrorMessage(message)
+      setStatus(message)
+    } finally {
+      setIsCreatingTask(false)
+    }
+  }, [taskDraft])
+
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-8 bg-zinc-50 p-8 text-zinc-900 dark:bg-zinc-900 dark:text-zinc-50">
       <div className="w-full max-w-xl rounded-3xl bg-white/80 p-10 shadow-2xl backdrop-blur dark:bg-zinc-800/80">
-        <h1 className="mb-6 text-center text-3xl font-semibold">Wispr Flow Demo</h1>
+        <h1 className="mb-6 text-center text-3xl font-semibold">Print Task Creator</h1>
         <p className="mb-8 text-center text-base text-zinc-700 dark:text-zinc-300">{status}</p>
         <div className="flex flex-col items-center gap-4">
           <button
@@ -152,6 +238,41 @@ export default function Home() {
           <div className="mt-6 rounded-2xl border border-indigo-300 bg-indigo-50 p-4 text-sm leading-relaxed text-zinc-900 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-50">
             <h2 className="mb-2 text-base font-semibold text-indigo-600 dark:text-indigo-300">ChatGPT formatted output</h2>
             <pre className="whitespace-pre-wrap font-sans text-sm text-zinc-800 dark:text-indigo-50">{formattedOutput}</pre>
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+              <button
+                type="button"
+                onClick={handleStartOver}
+                className="w-full rounded-full border border-indigo-400 px-6 py-3 text-sm font-semibold text-indigo-600 transition hover:border-indigo-500 hover:text-indigo-700 dark:border-indigo-600 dark:text-indigo-200 dark:hover:border-indigo-500 dark:hover:text-indigo-100"
+              >
+                Start over
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateTask}
+                disabled={isCreatingTask}
+                className="w-full rounded-full bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-70 dark:bg-indigo-500 dark:hover:bg-indigo-400"
+              >
+                {isCreatingTask ? "Creating task..." : "Create ClickUp task"}
+              </button>
+            </div>
+            {taskInfo && (
+              <div className="mt-6 rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-100">
+                <h3 className="text-base font-semibold">Task created</h3>
+                <p>
+                  <span className="font-medium">Name:</span> {taskInfo.name}
+                </p>
+                <p>
+                  <span className="font-medium">Task ID:</span> {taskInfo.publicId || taskInfo.id || "N/A"}
+                </p>
+                {taskInfo.url && (
+                  <p>
+                    <a className="text-indigo-600 underline dark:text-indigo-300" href={taskInfo.url} target="_blank" rel="noreferrer">
+                      Open in ClickUp
+                    </a>
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
