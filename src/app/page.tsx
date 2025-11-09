@@ -461,20 +461,7 @@ export default function Home() {
     <main className="flex min-h-dvh flex-col items-center bg-white px-4 py-10 text-zinc-900 sm:px-6">
       <div className="w-full max-w-4xl space-y-8">
         <header className="flex flex-col gap-3 text-center sm:text-left">
-          <div className="flex flex-col items-center justify-between gap-2 sm:flex-row">
-            <h1 className="text-3xl font-semibold sm:text-4xl text-zinc-900">Print Task - Creator</h1>
-            {IS_NON_PROD && (
-              <button
-                type="button"
-                onClick={handleClearCaches}
-                disabled={isClearingCache}
-                className="flex items-center gap-2 rounded-full border border-zinc-400 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-600 transition hover:border-zinc-700 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isClearingCache && <span className="h-3 w-3 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" aria-hidden="true" />}
-                <span>{isClearingCache ? "Clearing..." : "Clean cache"}</span>
-              </button>
-            )}
-          </div>
+          <h1 className="text-3xl font-semibold sm:text-4xl text-zinc-900">Print Task Creator</h1>
           <p className="text-base text-zinc-600 sm:max-w-2xl">Record a quick note, get a structured summary, and push it straight to ClickUp.</p>
         </header>
 
@@ -589,6 +576,18 @@ export default function Home() {
             </article>
           </div>
         </section>
+
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={handleClearCaches}
+            disabled={isClearingCache}
+            className="flex items-center gap-2 rounded-full border border-zinc-400 px-5 py-2 text-sm font-semibold text-zinc-600 transition hover:border-zinc-700 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isClearingCache && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" aria-hidden="true" />}
+            <span>{isClearingCache ? "Clearing cache..." : "Clear PWA cache"}</span>
+          </button>
+        </div>
       </div>
     </main>
   )
