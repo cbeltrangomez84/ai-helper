@@ -1,7 +1,24 @@
 import { NextRequest, NextResponse } from "next/server"
 
+type DraftSnapshot = {
+  title?: string
+  objective?: string
+  acceptanceCriteria?: string
+  formatted?: string
+}
+
+type HistoryEntry = {
+  version?: number
+  transcript?: string
+  draft?: DraftSnapshot
+}
+
 type Payload = {
   text?: string
+  transcript?: string
+  mode?: "create" | "edit"
+  previousDraft?: DraftSnapshot | null
+  history?: HistoryEntry[]
 }
 
 type OpenAIChatResponse = {
@@ -21,6 +38,10 @@ type ChatGPTSections = {
 
 const PROMPT_INSTRUCTIONS =
   "Rewrite the provided content so it becomes a task specification in Markdown with three sections using `##` headings: Title, Objective, and Acceptance Criteria. The Title section must contain a single concise line. The Objective section should be a short paragraph. The Acceptance Criteria section must be a bullet list (use `-`). Fix grammar and spelling. Always respond in English."
+
+const EDIT_PROMPT_INSTRUCTIONS = `${PROMPT_INSTRUCTIONS}
+
+You will receive an existing task specification along with requested modifications expressed in natural language. Apply only the requested changes while preserving all other details. Treat the provided specification as the single source of truth unless a change explicitly overrides it.`
 
 function extractSections(markdown: string): ChatGPTSections {
   const matches = markdown.matchAll(/^##\s+([^\n]+)\n([\s\S]*?)(?=^##\s+|\s*$)/gim)
@@ -46,14 +67,54 @@ function extractSections(markdown: string): ChatGPTSections {
   }
 }
 
-function buildChatGPTPrompt(content: string) {
+function buildCreatePrompt(content: string) {
   return `${PROMPT_INSTRUCTIONS}\n\nContent to format:\n${content.trim()}`
 }
 
-export async function POST(request: NextRequest) {
-  const { text }: Payload = await request.json()
+function buildEditPrompt({
+  baseSpecification,
+  changeRequest,
+}: {
+  baseSpecification: string
+  changeRequest: string
+}) {
+  return `${EDIT_PROMPT_INSTRUCTIONS}
 
-  console.log("[Wispr Flow] Received text:", text ?? "<empty>")
+Existing task specification (this is the source of truth to be modified):
+${baseSpecification.trim()}
+
+Requested modifications (apply these changes exactly and only where relevant):
+${changeRequest.trim()}
+
+Guidelines:
+- Preserve sections that are not mentioned in the requested modifications.
+- Do not reintroduce details that have been removed in previous revisions.
+- Maintain formatting with Title, Objective, and Acceptance Criteria (bullet list) in Markdown.
+- If a requested change conflicts with the existing content, follow the requested change.
+
+Return only the updated specification in Markdown.`
+}
+
+export async function POST(request: NextRequest) {
+  const payload: Payload = await request.json()
+  const {
+    text,
+    transcript,
+    mode: rawMode,
+    previousDraft,
+    history = [],
+  } = payload
+
+  const mode: "create" | "edit" = rawMode === "edit" ? "edit" : "create"
+  const transcribedInput = (transcript ?? text ?? "").trim()
+
+  console.log("[Wispr Flow] Received payload:", {
+    mode,
+    hasText: Boolean(text),
+    hasTranscript: Boolean(transcript),
+    hasPreviousDraft: Boolean(previousDraft?.formatted),
+    historyLength: history.length,
+  })
 
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) {
@@ -67,7 +128,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  if (!text?.trim()) {
+  if (mode === "create" && !transcribedInput) {
     return NextResponse.json(
       {
         ok: false,
@@ -77,7 +138,35 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const prompt = buildChatGPTPrompt(text)
+  if (mode === "edit") {
+    if (!previousDraft?.formatted?.trim()) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: "Previous draft is required to process edits.",
+        },
+        { status: 400 }
+      )
+    }
+
+    if (!transcribedInput) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: "Edit instructions are empty. Provide the changes you want to apply.",
+        },
+        { status: 400 }
+      )
+    }
+  }
+
+  const prompt =
+    mode === "edit"
+      ? buildEditPrompt({
+          baseSpecification: previousDraft?.formatted ?? "",
+          changeRequest: transcribedInput,
+        })
+      : buildCreatePrompt(transcribedInput || text || "")
 
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -134,7 +223,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      received: text,
+      received: transcribedInput || text,
       formatted: sections.formatted,
       title: sections.title,
       objective: sections.objective,

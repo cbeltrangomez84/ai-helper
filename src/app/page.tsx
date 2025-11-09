@@ -13,6 +13,14 @@ type TaskDraft = {
   formatted: string
 }
 
+type CaptureIntent = "create" | "edit"
+
+type DraftHistoryEntry = {
+  version: number
+  draft: TaskDraft
+  transcript: string
+}
+
 type CreatedTask = {
   id?: string
   name?: string
@@ -38,6 +46,8 @@ export default function Home() {
   const [taskInfo, setTaskInfo] = useState<CreatedTask | null>(null)
   const [isCreatingTask, setIsCreatingTask] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [captureIntent, setCaptureIntent] = useState<CaptureIntent>("create")
+  const [draftHistory, setDraftHistory] = useState<DraftHistoryEntry[]>([])
 
   const clientRef = useRef<WisprFlowClient | null>(null)
 
@@ -101,77 +111,123 @@ export default function Home() {
     }
   }, [])
 
-  const sendToBackend = useCallback(async (text: string) => {
-    try {
-      const response = await fetch("/api/wispr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      })
+  const sendToBackend = useCallback(
+    async ({ transcript: transcriptPayload, mode: intent, baseDraft, history }: { transcript: string; mode: CaptureIntent; baseDraft?: TaskDraft | null; history: DraftHistoryEntry[] }) => {
+      try {
+        const response = await fetch("/api/wispr", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            transcript: transcriptPayload,
+            mode: intent,
+            text: transcriptPayload,
+            previousDraft: baseDraft ?? null,
+            history: history.map((entry) => ({
+              version: entry.version,
+              transcript: entry.transcript,
+              draft: entry.draft,
+            })),
+          }),
+        })
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(errorText || "The backend did not accept the transcription.")
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(errorText || "The backend did not accept the transcription.")
+        }
+
+        const payload: {
+          formatted?: string | null
+          title?: string
+          objective?: string
+          acceptanceCriteria?: string
+        } = await response.json()
+
+        const newDraft: TaskDraft = {
+          title: payload.title?.trim() ?? "",
+          objective: payload.objective?.trim() ?? "",
+          acceptanceCriteria: payload.acceptanceCriteria?.trim() ?? "",
+          formatted: payload.formatted?.trim() ?? "",
+        }
+
+        setFormattedOutput(newDraft.formatted || null)
+        setTaskDraft(newDraft)
+        setTaskInfo(null)
+        setErrorMessage(null)
+        setStatus(intent === "edit" ? "Updated summary with your edits." : "Summary ready. Review before creating the task.")
+        setDraftHistory((previousHistory) => {
+          if (intent === "create" || previousHistory.length === 0) {
+            return [
+              {
+                version: 1,
+                draft: newDraft,
+                transcript: transcriptPayload,
+              },
+            ]
+          }
+
+          const nextVersion = (previousHistory.at(-1)?.version ?? previousHistory.length) + 1
+          return [
+            ...previousHistory,
+            {
+              version: nextVersion,
+              draft: newDraft,
+              transcript: transcriptPayload,
+            },
+          ]
+        })
+        setCaptureIntent("create")
+      } catch (error) {
+        console.error("Failed to notify backend", error)
+        const message = error instanceof Error ? error.message : "Unable to contact the backend."
+        setErrorMessage(message)
+        setStatus(formatStatusMessage(message))
+      }
+    },
+    [formatStatusMessage]
+  )
+
+  const startSession = useCallback(
+    async (intent: CaptureIntent) => {
+      resetClient()
+      setErrorMessage(null)
+      setTranscript("")
+      setCaptureIntent(intent)
+      if (intent === "create") {
+        setFormattedOutput(null)
+        setTaskDraft(null)
+        setTaskInfo(null)
+        setDraftHistory([])
+        setStatus("Preparing the recording...")
+      } else {
+        setStatus("Preparing to capture your edits...")
       }
 
-      const payload: {
-        formatted?: string | null
-        title?: string
-        objective?: string
-        acceptanceCriteria?: string
-      } = await response.json()
-
-      setFormattedOutput(payload.formatted ?? null)
-      setTaskDraft({
-        title: payload.title?.trim() ?? "",
-        objective: payload.objective?.trim() ?? "",
-        acceptanceCriteria: payload.acceptanceCriteria?.trim() ?? "",
-        formatted: payload.formatted?.trim() ?? "",
+      const client = new WisprFlowClient({
+        onStatus: (message) => setStatus(formatStatusMessage(message)),
+        onPartial: (text) => setTranscript(text),
+        onError: (error) => {
+          console.error("Wispr error", error)
+          setErrorMessage(error.message)
+          setStatus("An error occurred while capturing audio.")
+          setMode("idle")
+          resetClient()
+        },
       })
-      setTaskInfo(null)
-      setErrorMessage(null)
-      setStatus("Summary ready. Review before creating the task.")
-    } catch (error) {
-      console.error("Failed to notify backend", error)
-      const message = error instanceof Error ? error.message : "Unable to contact the backend."
-      setErrorMessage(message)
-      setStatus(formatStatusMessage(message))
-    }
-  }, [])
 
-  const startSession = useCallback(async () => {
-    resetClient()
-    setErrorMessage(null)
-    setTranscript("")
-    setFormattedOutput(null)
-    setTaskDraft(null)
-    setTaskInfo(null)
+      clientRef.current = client
 
-    const client = new WisprFlowClient({
-      onStatus: (message) => setStatus(formatStatusMessage(message)),
-      onPartial: (text) => setTranscript(text),
-      onError: (error) => {
-        console.error("Wispr error", error)
-        setErrorMessage(error.message)
-        setStatus("An error occurred while capturing audio.")
-        setMode("idle")
+      try {
+        await client.start({ languages: ["es", "en"] })
+        setMode("recording")
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Could not start the audio capture."
+        setErrorMessage(message)
+        setStatus(formatStatusMessage(message))
         resetClient()
-      },
-    })
-
-    clientRef.current = client
-
-    try {
-      setStatus("Preparing the recording...")
-      await client.start({ languages: ["es", "en"] })
-      setMode("recording")
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not start the audio capture."
-      setErrorMessage(message)
-      setStatus(formatStatusMessage(message))
-      resetClient()
-    }
-  }, [resetClient])
+      }
+    },
+    [formatStatusMessage, resetClient]
+  )
 
   const stopSession = useCallback(async () => {
     if (!clientRef.current) {
@@ -185,30 +241,44 @@ export default function Home() {
       const finalText = await clientRef.current.finalize()
       if (finalText) {
         setTranscript(finalText)
-        await sendToBackend(finalText)
+        await sendToBackend({
+          transcript: finalText,
+          mode: captureIntent,
+          baseDraft: captureIntent === "edit" ? taskDraft : null,
+          history: draftHistory,
+        })
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not complete the transcription."
       setErrorMessage(message)
       setStatus(formatStatusMessage(message))
+      setCaptureIntent("create")
     } finally {
       resetClient()
       setMode("idle")
     }
-  }, [resetClient, sendToBackend])
+  }, [captureIntent, draftHistory, formatStatusMessage, resetClient, sendToBackend, taskDraft])
 
   const handleClick = useCallback(async () => {
     if (mode === "recording") {
       await stopSession()
     } else if (mode === "idle") {
-      await startSession()
+      await startSession(captureIntent)
     }
-  }, [mode, startSession, stopSession])
+  }, [captureIntent, mode, startSession, stopSession])
 
-  const buttonLabel = mode === "recording" ? "Stop recording" : mode === "finalizing" ? "Processing..." : "Start recording"
-  const buttonSubtext = mode === "recording" ? "Tap again when you're done to generate the summary." : mode === "finalizing" ? "Generating the summary..." : "Tap the microphone button to begin."
+  const buttonLabel = mode === "recording" ? (captureIntent === "edit" ? "Recording edit..." : "Stop recording") : mode === "finalizing" ? "Processing..." : "Start recording"
+  const buttonSubtext =
+    mode === "recording"
+      ? captureIntent === "edit"
+        ? "Describe the adjustments you want to make to the current draft."
+        : "Tap again when you're done to generate the summary."
+      : mode === "finalizing"
+      ? "Generating the summary..."
+      : "Tap the microphone button to begin."
 
-  const isButtonDisabled = mode === "finalizing"
+  const isEditRecording = captureIntent === "edit" && mode === "recording"
+  const isButtonDisabled = mode === "finalizing" || (captureIntent === "edit" && mode !== "idle")
 
   const handleStartOver = useCallback(() => {
     resetClient()
@@ -219,7 +289,23 @@ export default function Home() {
     setTaskDraft(null)
     setTaskInfo(null)
     setErrorMessage(null)
+    setCaptureIntent("create")
+    setDraftHistory([])
   }, [resetClient])
+
+  const handleEditDraft = useCallback(async () => {
+    if (captureIntent === "edit" && mode === "recording") {
+      await stopSession()
+      return
+    }
+
+    if (!taskDraft || mode !== "idle") {
+      return
+    }
+
+    setCaptureIntent("edit")
+    await startSession("edit")
+  }, [captureIntent, mode, startSession, stopSession, taskDraft])
 
   const handleCreateTask = useCallback(async () => {
     if (!taskDraft?.title || !taskDraft.objective) {
@@ -308,13 +394,29 @@ export default function Home() {
             <article className="flex min-h-[160px] flex-col rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm leading-relaxed text-zinc-100">
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Generated summary</h2>
-                {formattedOutput && <span className="rounded-full border border-emerald-400/30 px-3 py-1 text-xs font-medium text-emerald-300">Ready</span>}
+                {formattedOutput && (
+                  <span className="inline-flex items-center justify-center rounded-full border border-emerald-400/40 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-300">
+                    Ready
+                  </span>
+                )}
               </div>
 
               {formattedOutput ? (
                 <>
                   <pre className="mt-3 flex-1 whitespace-pre-wrap font-sans text-sm text-zinc-100">{formattedOutput}</pre>
                   <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={handleEditDraft}
+                      disabled={!taskDraft || mode === "finalizing"}
+                      className={`w-full rounded-full px-6 py-3 text-sm font-semibold transition sm:w-auto ${
+                        isEditRecording
+                          ? "border border-red-500/60 bg-red-500/20 text-red-100 hover:border-red-400 hover:text-red-50"
+                          : "border border-emerald-500/40 text-emerald-200 hover:border-emerald-400 hover:text-emerald-100"
+                      } disabled:cursor-not-allowed disabled:opacity-70`}
+                    >
+                      {isEditRecording ? "Stop edit capture" : "Edit with voice"}
+                    </button>
                     <button
                       type="button"
                       onClick={handleStartOver}
