@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Capture spoken requirements and create formatted ClickUp tasks on the go.",
     start_url: "/",
     display: "standalone",
-    background_color: "#f8fafc",
-    theme_color: "#312e81",
+    background_color: "#000000",
+    theme_color: "#000000",
     icons: [
       {
         src: "/icons/task-creator.png",
