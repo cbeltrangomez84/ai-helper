@@ -462,7 +462,7 @@ export default function Home() {
       <div className="w-full max-w-4xl space-y-8">
         <header className="flex flex-col gap-3 text-center sm:text-left">
           <div className="flex flex-col items-center justify-between gap-2 sm:flex-row">
-            <h1 className="text-3xl font-semibold sm:text-4xl text-zinc-900">Print Task Creator</h1>
+            <h1 className="text-3xl font-semibold sm:text-4xl text-zinc-900">Print Task - Creator</h1>
             {IS_NON_PROD && (
               <button
                 type="button"
