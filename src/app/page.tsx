@@ -37,6 +37,8 @@ const MicIcon = (props: SVGProps<SVGSVGElement>) => (
   </svg>
 )
 
+const IS_NON_PROD = process.env.NODE_ENV !== "production"
+
 export default function Home() {
   const [status, setStatus] = useState("Ready to capture speech whenever you are.")
   const [transcript, setTranscript] = useState("")
@@ -50,6 +52,7 @@ export default function Home() {
   const [draftHistory, setDraftHistory] = useState<DraftHistoryEntry[]>([])
   const [editButtonState, setEditButtonState] = useState<"idle" | "starting" | "recording" | "processing">("idle")
   const [isProcessingSummary, setIsProcessingSummary] = useState(false)
+  const [isClearingCache, setIsClearingCache] = useState(false)
 
   const clientRef = useRef<WisprFlowClient | null>(null)
 
@@ -424,6 +427,36 @@ export default function Home() {
     }
   }, [taskDraft])
 
+  const handleClearCaches = useCallback(async () => {
+    if (isClearingCache || typeof window === "undefined") {
+      return
+    }
+
+    setIsClearingCache(true)
+    setStatus("Clearing local cache...")
+
+    try {
+      if ("serviceWorker" in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations()
+        await Promise.all(registrations.map((registration) => registration.unregister()))
+      }
+
+      if ("caches" in window) {
+        const cacheNames = await caches.keys()
+        await Promise.all(cacheNames.map((name) => caches.delete(name)))
+      }
+
+      setStatus("Cache cleared. Reloading...")
+      window.location.reload()
+    } catch (error) {
+      console.error("Failed to clear caches", error)
+      setErrorMessage("Unable to clear the cache automatically.")
+      setStatus("Please reload the page manually to apply the latest version.")
+    } finally {
+      setIsClearingCache(false)
+    }
+  }, [isClearingCache])
+
   return (
     <main className="flex min-h-dvh flex-col items-center bg-white px-4 py-10 text-zinc-900 sm:px-6">
       <div className="w-full max-w-4xl space-y-8">
@@ -543,6 +576,20 @@ export default function Home() {
             </article>
           </div>
         </section>
+
+        {IS_NON_PROD && (
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={handleClearCaches}
+              disabled={isClearingCache}
+              className="flex items-center gap-2 rounded-full border border-zinc-400 px-5 py-2 text-sm font-semibold text-zinc-600 transition hover:border-zinc-700 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isClearingCache && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" aria-hidden="true" />}
+              <span>{isClearingCache ? "Clearing cache..." : "Clear PWA cache"}</span>
+            </button>
+          </div>
+        )}
       </div>
     </main>
   )
