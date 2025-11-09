@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type SVGProps } from "react"
 
 import { WisprFlowClient } from "@/lib/wisprFlowClient"
 
-type Mode = "idle" | "recording" | "finalizing"
+type Mode = "idle" | "connecting" | "recording" | "finalizing"
 
 type TaskDraft = {
   title: string
@@ -48,6 +48,8 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [captureIntent, setCaptureIntent] = useState<CaptureIntent>("create")
   const [draftHistory, setDraftHistory] = useState<DraftHistoryEntry[]>([])
+  const [editButtonState, setEditButtonState] = useState<"idle" | "starting" | "recording" | "processing">("idle")
+  const [isProcessingSummary, setIsProcessingSummary] = useState(false)
 
   const clientRef = useRef<WisprFlowClient | null>(null)
 
@@ -176,11 +178,20 @@ export default function Home() {
           ]
         })
         setCaptureIntent("create")
+        setIsProcessingSummary(false)
+        if (intent === "edit") {
+          setEditButtonState("idle")
+        }
       } catch (error) {
         console.error("Failed to notify backend", error)
         const message = error instanceof Error ? error.message : "Unable to contact the backend."
         setErrorMessage(message)
         setStatus(formatStatusMessage(message))
+        setCaptureIntent("create")
+        setIsProcessingSummary(false)
+        if (intent === "edit") {
+          setEditButtonState("idle")
+        }
       }
     },
     [formatStatusMessage]
@@ -192,6 +203,8 @@ export default function Home() {
       setErrorMessage(null)
       setTranscript("")
       setCaptureIntent(intent)
+      setIsProcessingSummary(false)
+      setMode("connecting")
       if (intent === "create") {
         setFormattedOutput(null)
         setTaskDraft(null)
@@ -211,6 +224,10 @@ export default function Home() {
           setStatus("An error occurred while capturing audio.")
           setMode("idle")
           resetClient()
+          setCaptureIntent("create")
+          if (intent === "edit") {
+            setEditButtonState("idle")
+          }
         },
       })
 
@@ -219,11 +236,19 @@ export default function Home() {
       try {
         await client.start({ languages: ["es", "en"] })
         setMode("recording")
+        if (intent === "edit") {
+          setEditButtonState("recording")
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Could not start the audio capture."
         setErrorMessage(message)
         setStatus(formatStatusMessage(message))
         resetClient()
+        setMode("idle")
+        setCaptureIntent("create")
+        if (intent === "edit") {
+          setEditButtonState("idle")
+        }
       }
     },
     [formatStatusMessage, resetClient]
@@ -234,25 +259,40 @@ export default function Home() {
       return
     }
 
+    if (captureIntent === "edit") {
+      setEditButtonState("processing")
+    }
     setMode("finalizing")
-    setStatus("Generating summary...")
+    setStatus("Processing transcription...")
+    setIsProcessingSummary(true)
 
     try {
       const finalText = await clientRef.current.finalize()
       if (finalText) {
         setTranscript(finalText)
+        setIsProcessingSummary(true)
         await sendToBackend({
           transcript: finalText,
           mode: captureIntent,
           baseDraft: captureIntent === "edit" ? taskDraft : null,
           history: draftHistory,
         })
+      } else {
+        setIsProcessingSummary(false)
+        if (captureIntent === "edit") {
+          setEditButtonState("idle")
+        }
+        setCaptureIntent("create")
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not complete the transcription."
       setErrorMessage(message)
       setStatus(formatStatusMessage(message))
       setCaptureIntent("create")
+      setIsProcessingSummary(false)
+      if (captureIntent === "edit") {
+        setEditButtonState("idle")
+      }
     } finally {
       resetClient()
       setMode("idle")
@@ -264,21 +304,47 @@ export default function Home() {
       await stopSession()
     } else if (mode === "idle") {
       await startSession(captureIntent)
+    } else if (mode === "connecting") {
+      setStatus("Still connecting to the capture service...")
     }
   }, [captureIntent, mode, startSession, stopSession])
 
-  const buttonLabel = mode === "recording" ? (captureIntent === "edit" ? "Recording edit..." : "Stop recording") : mode === "finalizing" ? "Processing..." : "Start recording"
+  const buttonLabel =
+    mode === "recording" ? (captureIntent === "edit" ? "Recording edit..." : "Stop recording") : mode === "finalizing" ? "Processing..." : mode === "connecting" ? "Connecting..." : "Start recording"
   const buttonSubtext =
     mode === "recording"
       ? captureIntent === "edit"
         ? "Describe the adjustments you want to make to the current draft."
         : "Tap again when you're done to generate the summary."
       : mode === "finalizing"
-      ? "Generating the summary..."
+      ? "Processing the transcription..."
+      : mode === "connecting"
+      ? "Preparing the capture session..."
       : "Tap the microphone button to begin."
 
-  const isEditRecording = captureIntent === "edit" && mode === "recording"
-  const isButtonDisabled = mode === "finalizing" || (captureIntent === "edit" && mode !== "idle")
+  const isButtonDisabled = mode === "finalizing" || mode === "connecting"
+  const editButtonLabel =
+    editButtonState === "starting" ? "Connecting..." : editButtonState === "recording" ? "Stop edit capture" : editButtonState === "processing" ? "Processing edit..." : "Edit with voice"
+
+  const editButtonClassName =
+    editButtonState === "recording"
+      ? "border border-red-500/60 bg-red-500/20 text-red-100 hover:border-red-400 hover:text-red-50"
+      : editButtonState === "processing"
+      ? "border border-zinc-700 bg-zinc-800 text-zinc-400"
+      : editButtonState === "starting"
+      ? "border border-emerald-500/40 text-emerald-200 animate-pulse"
+      : "border border-emerald-500/40 text-emerald-200 hover:border-emerald-400 hover:text-emerald-100"
+
+  const isEditButtonDisabled =
+    !taskDraft ||
+    isProcessingSummary ||
+    editButtonState === "processing" ||
+    editButtonState === "starting" ||
+    mode === "finalizing" ||
+    mode === "connecting" ||
+    (mode === "recording" && captureIntent !== "edit")
+
+  const showEditSpinner = editButtonState === "starting" || editButtonState === "processing"
 
   const handleStartOver = useCallback(() => {
     resetClient()
@@ -291,21 +357,28 @@ export default function Home() {
     setErrorMessage(null)
     setCaptureIntent("create")
     setDraftHistory([])
+    setIsProcessingSummary(false)
+    setEditButtonState("idle")
   }, [resetClient])
 
   const handleEditDraft = useCallback(async () => {
+    if (!taskDraft) {
+      return
+    }
+
     if (captureIntent === "edit" && mode === "recording") {
       await stopSession()
       return
     }
 
-    if (!taskDraft || mode !== "idle") {
+    if (mode !== "idle" || editButtonState === "starting" || editButtonState === "processing") {
       return
     }
 
     setCaptureIntent("edit")
+    setEditButtonState("starting")
     await startSession("edit")
-  }, [captureIntent, mode, startSession, stopSession, taskDraft])
+  }, [captureIntent, editButtonState, mode, startSession, stopSession, taskDraft])
 
   const handleCreateTask = useCallback(async () => {
     if (!taskDraft?.title || !taskDraft.objective) {
@@ -395,8 +468,12 @@ export default function Home() {
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Generated summary</h2>
                 {formattedOutput && (
-                  <span className="inline-flex items-center justify-center rounded-full border border-emerald-400/40 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-300">
-                    Ready
+                  <span
+                    className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
+                      isProcessingSummary ? "border border-amber-400/60 text-amber-200" : "border border-emerald-400/40 text-emerald-300"
+                    }`}
+                  >
+                    {isProcessingSummary ? "Updating..." : "Ready"}
                   </span>
                 )}
               </div>
@@ -408,14 +485,13 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={handleEditDraft}
-                      disabled={!taskDraft || mode === "finalizing"}
-                      className={`w-full rounded-full px-6 py-3 text-sm font-semibold transition sm:w-auto ${
-                        isEditRecording
-                          ? "border border-red-500/60 bg-red-500/20 text-red-100 hover:border-red-400 hover:text-red-50"
-                          : "border border-emerald-500/40 text-emerald-200 hover:border-emerald-400 hover:text-emerald-100"
-                      } disabled:cursor-not-allowed disabled:opacity-70`}
+                      disabled={isEditButtonDisabled}
+                      className={`w-full rounded-full px-6 py-3 text-sm font-semibold transition sm:w-auto ${editButtonClassName} disabled:cursor-not-allowed disabled:opacity-70`}
                     >
-                      {isEditRecording ? "Stop edit capture" : "Edit with voice"}
+                      <span className="flex items-center justify-center gap-2">
+                        {showEditSpinner && <span className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-300/60 border-t-transparent" aria-hidden="true" />}
+                        <span>{editButtonLabel}</span>
+                      </span>
                     </button>
                     <button
                       type="button"
@@ -454,7 +530,14 @@ export default function Home() {
                 </>
               ) : (
                 <div className="mt-3 flex flex-1 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/80 p-4 text-center text-sm text-zinc-500">
-                  The structured summary will appear here after you stop the recording.
+                  {isProcessingSummary ? (
+                    <span className="flex items-center justify-center gap-2 text-zinc-300">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-600 border-t-emerald-400" aria-hidden="true" />
+                      Processing transcription...
+                    </span>
+                  ) : (
+                    "The structured summary will appear here after you stop the recording."
+                  )}
                 </div>
               )}
             </article>
