@@ -1,5 +1,5 @@
-const CACHE_NAME = "print-task-creator-v1"
-const CORE_ASSETS = ["/", "/icons/task-creator.png", "/icons/task-creator-192.png", "/icons/task-creator-512.png", "/apple-touch-icon.png"]
+const CACHE_NAME = "print-task-creator-v3"
+const CORE_ASSETS = ["/icons/task-creator.png", "/icons/task-creator-192.png", "/icons/task-creator-512.png", "/apple-touch-icon.png"]
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -21,6 +21,28 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") {
+    return
+  }
+
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone()
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy)).catch(() => {
+            /* noop */
+          })
+          return response
+        })
+        .catch(async () => {
+          const cached = await caches.match(event.request)
+          if (cached) {
+            return cached
+          }
+
+          return caches.match("/")
+        })
+    )
     return
   }
 
