@@ -17,7 +17,7 @@ type ClickUpTaskResponse = {
 const DEFAULT_CLICKUP_LIST_ID = "901112286868"
 
 function buildTaskDescription(title: string, objective: string, acceptanceCriteria: string) {
-  const sections = ["## Title", title.trim(), "", "## Objective", objective.trim()]
+  const sections = ["## Objective", objective.trim()]
 
   if (acceptanceCriteria.trim()) {
     sections.push("", "## Acceptance Criteria", acceptanceCriteria.trim())
@@ -113,4 +113,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-
