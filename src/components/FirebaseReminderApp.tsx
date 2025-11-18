@@ -22,6 +22,7 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [correctedTranscript, setCorrectedTranscript] = useState<string>("")
   const [correctionsLoaded, setCorrectionsLoaded] = useState(false)
+  const [additionalInfo, setAdditionalInfo] = useState<string>("")
 
   const [correctionsDict, setCorrectionsDict] = useState<Record<string, string> | undefined>(undefined)
 
@@ -57,6 +58,7 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
     setSavedTaskId(null)
     setSaveError(null)
     setCorrectedTranscript("")
+    setAdditionalInfo("")
   }, [reset])
 
   const handleTranscriptUpdate = useCallback((updatedTranscript: string) => {
@@ -70,12 +72,18 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
       return
     }
 
+    // Combine transcript with additional info if provided
+    let finalText = textToSave
+    if (additionalInfo.trim()) {
+      finalText = `${textToSave}\n\nadicional info: ${additionalInfo.trim()}`
+    }
+
     setIsSaving(true)
     setSaveError(null)
     setSavedTaskId(null)
 
     try {
-      const taskId = await addTaskToFirebase(textToSave)
+      const taskId = await addTaskToFirebase(finalText)
       setSavedTaskId(taskId)
     } catch (error) {
       console.error("Failed to save task to Firebase", error)
@@ -84,7 +92,7 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
     } finally {
       setIsSaving(false)
     }
-  }, [correctedTranscript, transcript])
+  }, [correctedTranscript, transcript, additionalInfo])
 
   const buttonLabel = isRecording ? "Stop recording" : isProcessing ? "Processing..." : mode === "connecting" ? "Connecting..." : "Start recording"
   const buttonSubtext = isRecording
@@ -172,6 +180,21 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
               ) : (correctedTranscript || transcript) && !isProcessing ? (
                 <div className="mt-3 flex flex-1 flex-col gap-3">
                   <p className="text-sm text-zinc-400">Review the transcription and save when ready.</p>
+                  
+                  <div>
+                    <label htmlFor="additional-info" className="block text-xs font-medium text-zinc-400 mb-2">
+                      Additional info (optional)
+                    </label>
+                    <textarea
+                      id="additional-info"
+                      value={additionalInfo}
+                      onChange={(e) => setAdditionalInfo(e.target.value)}
+                      placeholder="e.g., Token address: 0x1234..."
+                      rows={3}
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-none"
+                    />
+                  </div>
+
                   <button
                     type="button"
                     onClick={handleSaveToFirebase}
