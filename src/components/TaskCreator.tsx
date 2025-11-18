@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState, type SVGProps } from "react"
 
 import { AppHeader } from "@/components/AppHeader"
+import { SelectableTranscript } from "@/components/SelectableTranscript"
+import { getAllCorrections, loadCorrectionsFromFirebase } from "@/lib/wisprCorrections"
 import { WisprFlowClient } from "@/lib/wisprFlowClient"
 
 type Mode = "idle" | "connecting" | "recording" | "finalizing"
@@ -52,8 +54,16 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
   const [editButtonState, setEditButtonState] = useState<"idle" | "starting" | "recording" | "processing">("idle")
   const [isProcessingSummary, setIsProcessingSummary] = useState(false)
   const [isClearingCache, setIsClearingCache] = useState(false)
+  const [correctionsDict, setCorrectionsDict] = useState<Record<string, string> | undefined>(undefined)
 
   const clientRef = useRef<WisprFlowClient | null>(null)
+
+  // Load corrections from Firebase on mount
+  useEffect(() => {
+    loadCorrectionsFromFirebase().then((corrections) => {
+      setCorrectionsDict(Object.keys(corrections).length > 0 ? corrections : undefined)
+    })
+  }, [])
 
   const resetClient = useCallback(() => {
     clientRef.current?.dispose()
@@ -236,7 +246,10 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
       clientRef.current = client
 
       try {
-        await client.start({ languages: ["es", "en"] })
+        await client.start({
+          languages: ["es", "en"],
+          corrections: correctionsDict,
+        })
         setMode("recording")
         if (intent === "edit") {
           setEditButtonState("recording")
@@ -465,132 +478,131 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
             <p className="text-base text-zinc-600 sm:max-w-2xl">Record a quick note, get a structured summary, and push it straight to ClickUp.</p>
           </div>
 
-        <section className="rounded-3xl border border-zinc-900/80 bg-zinc-950 p-6 shadow-[0_25px_120px_rgba(0,0,0,0.45)] sm:p-8">
-          <div className="flex flex-col items-center gap-3 sm:flex-row sm:gap-6">
-            <button
-              type="button"
-              onClick={handleClick}
-              disabled={isButtonDisabled}
-              className={`flex w-full items-center justify-center gap-3 rounded-full px-8 py-4 text-lg font-semibold text-white transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/40 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto ${
-                mode === "recording" ? "bg-red-600 hover:bg-red-500 focus-visible:outline-red-400" : "bg-zinc-900 hover:bg-zinc-800 focus-visible:outline-zinc-300"
-              }`}
-            >
-              <span className={`flex h-12 w-12 items-center justify-center rounded-full ${mode === "recording" ? "bg-white/20 text-white" : "bg-zinc-800 text-zinc-100"}`}>
-                <MicIcon className="h-6 w-6" />
-              </span>
-              <span className="whitespace-nowrap">{buttonLabel}</span>
-            </button>
-            <p className="text-center text-sm text-zinc-400 sm:text-left" aria-live="polite">
-              {buttonSubtext}
+          <section className="rounded-3xl border border-zinc-900/80 bg-zinc-950 p-6 shadow-[0_25px_120px_rgba(0,0,0,0.45)] sm:p-8">
+            <div className="flex flex-col items-center gap-3 sm:flex-row sm:gap-6">
+              <button
+                type="button"
+                onClick={handleClick}
+                disabled={isButtonDisabled}
+                className={`flex w-full items-center justify-center gap-3 rounded-full px-8 py-4 text-lg font-semibold text-white transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/40 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto ${
+                  mode === "recording" ? "bg-red-600 hover:bg-red-500 focus-visible:outline-red-400" : "bg-zinc-900 hover:bg-zinc-800 focus-visible:outline-zinc-300"
+                }`}
+              >
+                <span className={`flex h-12 w-12 items-center justify-center rounded-full ${mode === "recording" ? "bg-white/20 text-white" : "bg-zinc-800 text-zinc-100"}`}>
+                  <MicIcon className="h-6 w-6" />
+                </span>
+                <span className="whitespace-nowrap">{buttonLabel}</span>
+              </button>
+              <p className="text-center text-sm text-zinc-400 sm:text-left" aria-live="polite">
+                {buttonSubtext}
+              </p>
+            </div>
+
+            <p className="mt-6 text-sm text-zinc-400" aria-live="polite">
+              {status}
             </p>
-          </div>
 
-          <p className="mt-6 text-sm text-zinc-400" aria-live="polite">
-            {status}
-          </p>
+            {errorMessage && <div className="mt-4 rounded-2xl border border-red-500/50 bg-red-500/10 p-4 text-sm text-red-200">{errorMessage}</div>}
 
-          {errorMessage && <div className="mt-4 rounded-2xl border border-red-500/50 bg-red-500/10 p-4 text-sm text-red-200">{errorMessage}</div>}
+            <div className="mt-6 grid gap-4 lg:grid-cols-2">
+              <article className="min-h-[160px] rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm text-zinc-200">
+                <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Live transcript</h2>
+                <SelectableTranscript transcript={transcript} className="whitespace-pre-wrap leading-relaxed" />
+              </article>
 
-          <div className="mt-6 grid gap-4 lg:grid-cols-2">
-            <article className="min-h-[160px] rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm text-zinc-200">
-              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Live transcript</h2>
-              {transcript ? <p className="whitespace-pre-wrap leading-relaxed">{transcript}</p> : <p className="text-zinc-500">Start a capture and the text will appear here in real time.</p>}
-            </article>
-
-            <article className="flex min-h-[160px] flex-col rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm leading-relaxed text-zinc-100">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Generated summary</h2>
-                {formattedOutput && (
-                  <span
-                    className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
-                      isProcessingSummary ? "border border-amber-400/60 text-amber-200" : "border border-emerald-400/40 text-emerald-300"
-                    }`}
-                  >
-                    {isProcessingSummary ? "Updating..." : "Ready"}
-                  </span>
-                )}
-              </div>
-
-              {formattedOutput ? (
-                <>
-                  <pre className="mt-3 flex-1 whitespace-pre-wrap font-sans text-sm text-zinc-100">{formattedOutput}</pre>
-                  <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                    <button
-                      type="button"
-                      onClick={handleEditDraft}
-                      disabled={isEditButtonDisabled}
-                      className={`w-full rounded-full px-6 py-3 text-sm font-semibold transition sm:w-auto ${editButtonClassName} disabled:cursor-not-allowed disabled:opacity-70`}
+              <article className="flex min-h-[160px] flex-col rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm leading-relaxed text-zinc-100">
+                <div className="flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Generated summary</h2>
+                  {formattedOutput && (
+                    <span
+                      className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${
+                        isProcessingSummary ? "border border-amber-400/60 text-amber-200" : "border border-emerald-400/40 text-emerald-300"
+                      }`}
                     >
-                      <span className="flex items-center justify-center gap-2">
-                        {showEditSpinner && <span className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-300/60 border-t-transparent" aria-hidden="true" />}
-                        <span>{editButtonLabel}</span>
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleStartOver}
-                      className="w-full rounded-full border border-zinc-600 px-6 py-3 text-sm font-semibold text-zinc-200 transition hover:border-zinc-400 hover:text-white sm:w-auto"
-                    >
-                      Start over
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCreateTask}
-                      disabled={isCreatingTask}
-                      className="w-full rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
-                    >
-                      {isCreatingTask ? "Creating task..." : "Create ClickUp task"}
-                    </button>
-                  </div>
-                  {taskInfo && (
-                    <div className="mt-4 rounded-2xl border border-emerald-500/40 bg-emerald-500/15 p-4 text-sm text-emerald-200">
-                      <h3 className="text-base font-semibold text-emerald-300">Task created</h3>
-                      <p>
-                        <span className="font-medium text-emerald-200/80">Name:</span> {taskInfo.name}
-                      </p>
-                      <p>
-                        <span className="font-medium text-emerald-200/80">ID:</span> {taskInfo.publicId || taskInfo.id || "N/A"}
-                      </p>
-                      {taskInfo.url && (
-                        <p>
-                          <a className="text-emerald-300 underline" href={taskInfo.url} target="_blank" rel="noreferrer">
-                            Open in ClickUp
-                          </a>
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <div className="mt-3 flex flex-1 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/80 p-4 text-center text-sm text-zinc-500">
-                  {isProcessingSummary ? (
-                    <span className="flex items-center justify-center gap-2 text-zinc-300">
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-600 border-t-emerald-400" aria-hidden="true" />
-                      Processing transcription...
+                      {isProcessingSummary ? "Updating..." : "Ready"}
                     </span>
-                  ) : (
-                    "The structured summary will appear here after you stop the recording."
                   )}
                 </div>
-              )}
-            </article>
-          </div>
-        </section>
 
-        <div className="flex justify-center">
-          <button
-            type="button"
-            onClick={handleClearCaches}
-            disabled={isClearingCache}
-            className="flex items-center gap-2 rounded-full border border-zinc-400 px-5 py-2 text-sm font-semibold text-zinc-600 transition hover:border-zinc-700 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isClearingCache && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" aria-hidden="true" />}
-            <span>{isClearingCache ? "Clearing cache..." : "Clear PWA cache"}</span>
-          </button>
+                {formattedOutput ? (
+                  <>
+                    <pre className="mt-3 flex-1 whitespace-pre-wrap font-sans text-sm text-zinc-100">{formattedOutput}</pre>
+                    <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={handleEditDraft}
+                        disabled={isEditButtonDisabled}
+                        className={`w-full rounded-full px-6 py-3 text-sm font-semibold transition sm:w-auto ${editButtonClassName} disabled:cursor-not-allowed disabled:opacity-70`}
+                      >
+                        <span className="flex items-center justify-center gap-2">
+                          {showEditSpinner && <span className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-300/60 border-t-transparent" aria-hidden="true" />}
+                          <span>{editButtonLabel}</span>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleStartOver}
+                        className="w-full rounded-full border border-zinc-600 px-6 py-3 text-sm font-semibold text-zinc-200 transition hover:border-zinc-400 hover:text-white sm:w-auto"
+                      >
+                        Start over
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCreateTask}
+                        disabled={isCreatingTask}
+                        className="w-full rounded-full bg-white px-6 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
+                      >
+                        {isCreatingTask ? "Creating task..." : "Create ClickUp task"}
+                      </button>
+                    </div>
+                    {taskInfo && (
+                      <div className="mt-4 rounded-2xl border border-emerald-500/40 bg-emerald-500/15 p-4 text-sm text-emerald-200">
+                        <h3 className="text-base font-semibold text-emerald-300">Task created</h3>
+                        <p>
+                          <span className="font-medium text-emerald-200/80">Name:</span> {taskInfo.name}
+                        </p>
+                        <p>
+                          <span className="font-medium text-emerald-200/80">ID:</span> {taskInfo.publicId || taskInfo.id || "N/A"}
+                        </p>
+                        {taskInfo.url && (
+                          <p>
+                            <a className="text-emerald-300 underline" href={taskInfo.url} target="_blank" rel="noreferrer">
+                              Open in ClickUp
+                            </a>
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="mt-3 flex flex-1 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/80 p-4 text-center text-sm text-zinc-500">
+                    {isProcessingSummary ? (
+                      <span className="flex items-center justify-center gap-2 text-zinc-300">
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-600 border-t-emerald-400" aria-hidden="true" />
+                        Processing transcription...
+                      </span>
+                    ) : (
+                      "The structured summary will appear here after you stop the recording."
+                    )}
+                  </div>
+                )}
+              </article>
+            </div>
+          </section>
+
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={handleClearCaches}
+              disabled={isClearingCache}
+              className="flex items-center gap-2 rounded-full border border-zinc-400 px-5 py-2 text-sm font-semibold text-zinc-600 transition hover:border-zinc-700 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isClearingCache && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent" aria-hidden="true" />}
+              <span>{isClearingCache ? "Clearing cache..." : "Clear PWA cache"}</span>
+            </button>
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
     </>
   )
 }
-

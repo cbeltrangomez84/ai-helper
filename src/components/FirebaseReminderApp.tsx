@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useState, type SVGProps } from "react"
 
 import { AppHeader } from "@/components/AppHeader"
+import { SelectableTranscript } from "@/components/SelectableTranscript"
 import { useVoiceRecording } from "@/hooks/useVoiceRecording"
 import { addTaskToFirebase } from "@/lib/firebaseTasks"
+import { getAllCorrections, loadCorrectionsFromFirebase } from "@/lib/wisprCorrections"
 
 const MicIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
@@ -18,29 +20,29 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
   const [isSaving, setIsSaving] = useState(false)
   const [savedTaskId, setSavedTaskId] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [correctedTranscript, setCorrectedTranscript] = useState<string>("")
+  const [correctionsLoaded, setCorrectionsLoaded] = useState(false)
+
+  const [correctionsDict, setCorrectionsDict] = useState<Record<string, string> | undefined>(undefined)
 
   const { mode, transcript, status, errorMessage, startRecording, stopRecording, reset, isRecording, isProcessing } = useVoiceRecording({
-    onTranscript: async (finalTranscript) => {
-      if (!finalTranscript.trim()) {
-        return
-      }
-
-      setIsSaving(true)
-      setSaveError(null)
-      setSavedTaskId(null)
-
-      try {
-        const taskId = await addTaskToFirebase(finalTranscript)
-        setSavedTaskId(taskId)
-      } catch (error) {
-        console.error("Failed to save task to Firebase", error)
-        const message = error instanceof Error ? error.message : "Unable to save the task to Firebase."
-        setSaveError(message)
-      } finally {
-        setIsSaving(false)
-      }
-    },
+    corrections: correctionsDict,
   })
+
+  // Load corrections from Firebase on mount
+  useEffect(() => {
+    loadCorrectionsFromFirebase().then((corrections) => {
+      setCorrectionsDict(Object.keys(corrections).length > 0 ? corrections : undefined)
+      setCorrectionsLoaded(true)
+    })
+  }, [])
+
+  // Update corrected transcript when transcript changes
+  useEffect(() => {
+    if (transcript && !correctedTranscript) {
+      setCorrectedTranscript(transcript)
+    }
+  }, [transcript, correctedTranscript])
 
   const handleClick = useCallback(async () => {
     if (isRecording) {
@@ -54,11 +56,39 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
     reset()
     setSavedTaskId(null)
     setSaveError(null)
+    setCorrectedTranscript("")
   }, [reset])
+
+  const handleTranscriptUpdate = useCallback((updatedTranscript: string) => {
+    setCorrectedTranscript(updatedTranscript)
+  }, [])
+
+  const handleSaveToFirebase = useCallback(async () => {
+    // Use corrected transcript if available, otherwise use original
+    const textToSave = correctedTranscript.trim() || transcript.trim()
+    if (!textToSave) {
+      return
+    }
+
+    setIsSaving(true)
+    setSaveError(null)
+    setSavedTaskId(null)
+
+    try {
+      const taskId = await addTaskToFirebase(textToSave)
+      setSavedTaskId(taskId)
+    } catch (error) {
+      console.error("Failed to save task to Firebase", error)
+      const message = error instanceof Error ? error.message : "Unable to save the task to Firebase."
+      setSaveError(message)
+    } finally {
+      setIsSaving(false)
+    }
+  }, [correctedTranscript, transcript])
 
   const buttonLabel = isRecording ? "Stop recording" : isProcessing ? "Processing..." : mode === "connecting" ? "Connecting..." : "Start recording"
   const buttonSubtext = isRecording
-    ? "Tap again when you're done to save the task."
+    ? "Tap again when you're done recording."
     : isProcessing
     ? "Processing the transcription..."
     : mode === "connecting"
@@ -73,7 +103,7 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
       <main className="flex min-h-dvh flex-col items-center bg-white px-4 py-10 text-zinc-900 sm:px-6">
         <div className="w-full max-w-4xl space-y-8">
           <div className="flex flex-col gap-3 text-center sm:text-left">
-            <p className="text-base text-zinc-600 sm:max-w-2xl">Record a task and it will be automatically saved to Firebase Realtime Database.</p>
+            <p className="text-base text-zinc-600 sm:max-w-2xl">Record a task, review the transcription, and save it to Firebase Realtime Database.</p>
           </div>
 
         <section className="rounded-3xl border border-zinc-900/80 bg-zinc-950 p-6 shadow-[0_25px_120px_rgba(0,0,0,0.45)] sm:p-8">
@@ -107,7 +137,11 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
           <div className="mt-6 grid gap-4 lg:grid-cols-2">
             <article className="min-h-[160px] rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm text-zinc-200">
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Live transcript</h2>
-              {transcript ? <p className="whitespace-pre-wrap leading-relaxed">{transcript}</p> : <p className="text-zinc-500">Start a recording and the text will appear here in real time.</p>}
+              <SelectableTranscript 
+                transcript={correctedTranscript || transcript} 
+                className="whitespace-pre-wrap leading-relaxed"
+                onTranscriptUpdate={handleTranscriptUpdate}
+              />
             </article>
 
             <article className="flex min-h-[160px] flex-col rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm leading-relaxed text-zinc-100">
@@ -135,6 +169,18 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
                     Record another task
                   </button>
                 </div>
+              ) : (correctedTranscript || transcript) && !isProcessing ? (
+                <div className="mt-3 flex flex-1 flex-col gap-3">
+                  <p className="text-sm text-zinc-400">Review the transcription and save when ready.</p>
+                  <button
+                    type="button"
+                    onClick={handleSaveToFirebase}
+                    disabled={isSaving || !(correctedTranscript.trim() || transcript.trim())}
+                    className="w-full rounded-full bg-emerald-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Save to Firebase
+                  </button>
+                </div>
               ) : (
                 <div className="mt-3 flex flex-1 items-center justify-center rounded-2xl border border-dashed border-zinc-700 bg-zinc-900/80 p-4 text-center text-sm text-zinc-500">
                   {isProcessing ? (
@@ -143,7 +189,7 @@ export function FirebaseReminderApp({ onBack }: { onBack: () => void }) {
                       Processing transcription...
                     </span>
                   ) : (
-                    "The task will be saved to Firebase after you stop the recording."
+                    "The transcription will appear here after you stop recording."
                   )}
                 </div>
               )}

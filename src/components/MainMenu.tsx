@@ -19,6 +19,11 @@ const apps: App[] = [
     name: "Firebase Reminder App",
     description: "Manage your reminders with Firebase integration.",
   },
+  {
+    id: "corrections-manager",
+    name: "Corrections Manager",
+    description: "Manage speech recognition corrections for better transcription accuracy.",
+  },
 ]
 
 export function MainMenu({ onNavigate }: { onNavigate: (appId: AppId) => void }) {

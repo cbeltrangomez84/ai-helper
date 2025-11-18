@@ -14,6 +14,21 @@ type WisprTokenResponse = {
 type StartOptions = {
   languages?: string[]
   context?: Record<string, unknown>
+  /**
+   * Diccionario de correcciones para mejorar el reconocimiento de voz.
+   * Las claves son las palabras que Wispr Flow está entendiendo mal,
+   * y los valores son las palabras correctas que debería transcribir.
+   * 
+   * Ejemplo:
+   * ```typescript
+   * corrections: {
+   *   "gato": "gato",
+   *   "pero": "perro",
+   *   "casa": "casa"
+   * }
+   * ```
+   */
+  corrections?: Record<string, string>
 }
 
 type WisprMessage = {
@@ -133,12 +148,26 @@ export class WisprFlowClient {
 
     websocket.addEventListener("open", () => {
       this.callbacks.onStatus?.("Conectando con Wispr Flow...")
+      
+      // Combinar context y corrections en un solo objeto context
+      const contextPayload: Record<string, unknown> = {
+        ...(options.context ?? {}),
+      }
+      
+      // Si hay correcciones, agregarlas al context
+      // Wispr Flow puede usar diferentes formatos, intentamos con 'corrections' y 'vocabulary'
+      if (options.corrections && Object.keys(options.corrections).length > 0) {
+        contextPayload.corrections = options.corrections
+        // También agregamos como vocabulary para compatibilidad
+        contextPayload.vocabulary = Object.values(options.corrections)
+      }
+      
       websocket.send(
         JSON.stringify({
           type: "auth",
           access_token: accessToken,
           language: this.languages,
-          context: options.context ?? {},
+          context: contextPayload,
         })
       )
     })

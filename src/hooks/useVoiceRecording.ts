@@ -10,10 +10,16 @@ export interface UseVoiceRecordingOptions {
   onTranscript?: (transcript: string) => void
   onError?: (error: Error) => void
   languages?: string[]
+  /**
+   * Diccionario de correcciones para mejorar el reconocimiento de voz.
+   * Las claves son las palabras que Wispr Flow está entendiendo mal,
+   * y los valores son las palabras correctas que debería transcribir.
+   */
+  corrections?: Record<string, string>
 }
 
 export function useVoiceRecording(options: UseVoiceRecordingOptions = {}) {
-  const { onTranscript, onError, languages = ["es", "en"] } = options
+  const { onTranscript, onError, languages = ["es", "en"], corrections } = options
 
   const [mode, setMode] = useState<RecordingMode>("idle")
   const [transcript, setTranscript] = useState("")
@@ -86,7 +92,10 @@ export function useVoiceRecording(options: UseVoiceRecordingOptions = {}) {
     clientRef.current = client
 
     try {
-      await client.start({ languages })
+      await client.start({ 
+        languages,
+        corrections: corrections && Object.keys(corrections).length > 0 ? corrections : undefined
+      })
       setMode("recording")
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not start the audio capture."
@@ -96,7 +105,7 @@ export function useVoiceRecording(options: UseVoiceRecordingOptions = {}) {
       setMode("idle")
       onError?.(error instanceof Error ? error : new Error(message))
     }
-  }, [formatStatusMessage, languages, onError, resetClient])
+  }, [formatStatusMessage, languages, corrections, onError, resetClient])
 
   const stopRecording = useCallback(async (): Promise<string | null> => {
     if (!clientRef.current) {
