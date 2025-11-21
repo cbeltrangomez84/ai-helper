@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 
 import { CorrectionsManager } from "@/components/CorrectionsManager"
 import { FirebaseReminderApp } from "@/components/FirebaseReminderApp"
+import { FirebaseTasksManager } from "@/components/FirebaseTasksManager"
 import { MainMenu } from "@/components/MainMenu"
 import { TaskCreator } from "@/components/TaskCreator"
 import { getActiveApp, setActiveApp, type AppId } from "@/lib/navigation"
@@ -37,6 +38,7 @@ export default function Home() {
       {activeApp === "home" && <MainMenu onNavigate={handleNavigate} />}
       {activeApp === "task-creator" && <TaskCreator onBack={handleBack} />}
       {activeApp === "firebase-reminder" && <FirebaseReminderApp onBack={handleBack} />}
+      {activeApp === "firebase-tasks-manager" && <FirebaseTasksManager onBack={handleBack} />}
       {activeApp === "corrections-manager" && <CorrectionsManager onBack={handleBack} />}
     </>
   )

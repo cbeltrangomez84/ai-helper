@@ -20,6 +20,11 @@ const apps: App[] = [
     description: "Manage your reminders with Firebase integration.",
   },
   {
+    id: "firebase-tasks-manager",
+    name: "Firebase Tasks Manager",
+    description: "View pending Firebase tasks and convert them to ClickUp tasks.",
+  },
+  {
     id: "corrections-manager",
     name: "Corrections Manager",
     description: "Manage speech recognition corrections for better transcription accuracy.",
