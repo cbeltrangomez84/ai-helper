@@ -6,6 +6,7 @@ import { CorrectionsManager } from "@/components/CorrectionsManager"
 import { FirebaseReminderApp } from "@/components/FirebaseReminderApp"
 import { FirebaseTasksManager } from "@/components/FirebaseTasksManager"
 import { MainMenu } from "@/components/MainMenu"
+import { SprintAgendaPlanner } from "@/components/SprintAgendaPlanner"
 import { SettingsMenu } from "@/components/SettingsMenu"
 import { SprintConfigManager } from "@/components/SprintConfigManager"
 import { TeamMembersManager } from "@/components/TeamMembersManager"
@@ -43,9 +44,10 @@ export default function Home() {
       {activeApp === "task-creator" && <TaskCreator onBack={handleBack} />}
       {activeApp === "firebase-reminder" && <FirebaseReminderApp onBack={handleBack} />}
       {activeApp === "firebase-tasks-manager" && <FirebaseTasksManager onBack={handleBack} />}
-      {activeApp === "corrections-manager" && <CorrectionsManager onBack={handleBack} />}
-      {activeApp === "sprint-config-manager" && <SprintConfigManager onBack={handleBack} />}
-      {activeApp === "team-members-manager" && <TeamMembersManager onBack={handleBack} />}
+        {activeApp === "corrections-manager" && <CorrectionsManager onBack={handleBack} />}
+        {activeApp === "sprint-config-manager" && <SprintConfigManager onBack={handleBack} />}
+        {activeApp === "team-members-manager" && <TeamMembersManager onBack={handleBack} />}
+        {activeApp === "clickup-agenda" && <SprintAgendaPlanner onBack={handleBack} />}
     </>
   )
 }

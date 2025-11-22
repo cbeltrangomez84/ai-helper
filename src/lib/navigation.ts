@@ -1,6 +1,15 @@
 const ACTIVE_APP_KEY = "activeApp"
 
-export type AppId = "home" | "task-creator" | "firebase-reminder" | "corrections-manager" | "firebase-tasks-manager" | "settings" | "sprint-config-manager" | "team-members-manager"
+export type AppId =
+  | "home"
+  | "task-creator"
+  | "firebase-reminder"
+  | "corrections-manager"
+  | "firebase-tasks-manager"
+  | "settings"
+  | "sprint-config-manager"
+  | "team-members-manager"
+  | "clickup-agenda"
 
 export function getActiveApp(): AppId {
   if (typeof window === "undefined") {

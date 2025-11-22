@@ -32,6 +32,11 @@ const apps: App[] = [
     name: "Firebase Tasks Manager",
     description: "View pending Firebase tasks and convert them to ClickUp tasks.",
   },
+  {
+    id: "clickup-agenda",
+    name: "ClickUp Agenda Organizer",
+    description: "Organize sprint tasks by person and drag them across the week from your phone.",
+  },
 ]
 
 export function MainMenu({ onNavigate }: { onNavigate: (appId: AppId) => void }) {

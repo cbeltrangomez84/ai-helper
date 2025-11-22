@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import { getBackEnGeneralListIdFromConfig, getNextSprintFromConfig } from "@/lib/firebaseSprintConfig"
+import { buildClickUpDescription } from "@/lib/clickupFormatting"
+import { getBackEnGeneralListIdFromConfig } from "@/lib/firebaseSprintConfig"
 
 type ClickUpTaskPayload = {
   title?: string
@@ -23,16 +24,6 @@ type ClickUpTaskResponse = {
 }
 
 const DEFAULT_CLICKUP_LIST_ID = "901112286868"
-
-function buildTaskDescription(title: string, objective: string, acceptanceCriteria: string) {
-  const sections = ["## Objective", objective.trim()]
-
-  if (acceptanceCriteria.trim()) {
-    sections.push("", "## Acceptance Criteria", acceptanceCriteria.trim())
-  }
-
-  return sections.join("\n")
-}
 
 /**
  * Parse time estimate string to milliseconds
@@ -155,9 +146,9 @@ export async function POST(request: NextRequest) {
       start_date?: number
       due_date?: number
       time_estimate?: number
-    } = {
-      name: title.trim(),
-      markdown_description: buildTaskDescription(title, objective, acceptanceCriteria ?? ""),
+      } = {
+        name: title.trim(),
+        markdown_description: buildClickUpDescription(title, objective, acceptanceCriteria ?? ""),
       tags: [],
     }
 
