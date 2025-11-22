@@ -1,4 +1,4 @@
-type ClickUpSprint = {
+export type ClickUpSprint = {
   id: string
   name: string
   start_date: number | null
@@ -6,7 +6,7 @@ type ClickUpSprint = {
   status: "open" | "closed"
 }
 
-type ClickUpList = {
+export type ClickUpList = {
   id: string
   name: string
   archived?: boolean
@@ -16,7 +16,7 @@ type ClickUpList = {
   }
 }
 
-type ClickUpTeam = {
+export type ClickUpTeam = {
   id: string
   name: string
 }
