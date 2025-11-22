@@ -20,6 +20,11 @@ const settingsApps: SettingsApp[] = [
     name: "Sprint Configuration",
     description: "Configure and sync sprints from ClickUp.",
   },
+  {
+    id: "team-members-manager",
+    name: "Team Members",
+    description: "Manage team members and how to address them.",
+  },
 ]
 
 const SettingsIcon = (props: SVGProps<SVGSVGElement>) => (

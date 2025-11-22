@@ -8,6 +8,7 @@ import { FirebaseTasksManager } from "@/components/FirebaseTasksManager"
 import { MainMenu } from "@/components/MainMenu"
 import { SettingsMenu } from "@/components/SettingsMenu"
 import { SprintConfigManager } from "@/components/SprintConfigManager"
+import { TeamMembersManager } from "@/components/TeamMembersManager"
 import { TaskCreator } from "@/components/TaskCreator"
 import { getActiveApp, setActiveApp, type AppId } from "@/lib/navigation"
 
@@ -44,6 +45,7 @@ export default function Home() {
       {activeApp === "firebase-tasks-manager" && <FirebaseTasksManager onBack={handleBack} />}
       {activeApp === "corrections-manager" && <CorrectionsManager onBack={handleBack} />}
       {activeApp === "sprint-config-manager" && <SprintConfigManager onBack={handleBack} />}
+      {activeApp === "team-members-manager" && <TeamMembersManager onBack={handleBack} />}
     </>
   )
 }
