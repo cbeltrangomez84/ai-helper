@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 
 import { AppHeader } from "@/components/AppHeader"
-import { getPendingTasks, moveTaskToCompleted, type FirebaseTaskWithId } from "@/lib/firebaseTasks"
+import { discardTask, getPendingTasks, moveTaskToCompleted, type FirebaseTaskWithId } from "@/lib/firebaseTasks"
 import { TaskDetailView } from "./TaskDetailView"
 
 export function FirebaseTasksManager({ onBack }: { onBack: () => void }) {
@@ -49,12 +49,28 @@ export function FirebaseTasksManager({ onBack }: { onBack: () => void }) {
     [loadTasks]
   )
 
+  const handleTaskDiscarded = useCallback(
+    async (taskId: string) => {
+      try {
+        await discardTask(taskId)
+        // Reload tasks to remove the discarded one
+        await loadTasks()
+        // Navigate back to list after discarding
+        setSelectedTask(null)
+      } catch (err) {
+        console.error("Failed to discard task", err)
+        throw err
+      }
+    },
+    [loadTasks]
+  )
+
   const handleBackFromDetail = useCallback(() => {
     setSelectedTask(null)
   }, [])
 
   if (selectedTask) {
-    return <TaskDetailView task={selectedTask} onBack={handleBackFromDetail} onTaskCreated={handleTaskCreated} />
+    return <TaskDetailView task={selectedTask} onBack={handleBackFromDetail} onTaskCreated={handleTaskCreated} onTaskDiscarded={handleTaskDiscarded} />
   }
 
   return (

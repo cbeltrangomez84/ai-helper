@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type SVGProps } from "react"
 
 import { AppHeader } from "@/components/AppHeader"
 import { SelectableTranscript } from "@/components/SelectableTranscript"
+import { TaskEditView } from "@/components/TaskEditView"
 import { getAllCorrections, loadCorrectionsFromFirebase } from "@/lib/wisprCorrections"
 import { WisprFlowClient } from "@/lib/wisprFlowClient"
 
@@ -55,6 +56,10 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
   const [isProcessingSummary, setIsProcessingSummary] = useState(false)
   const [isClearingCache, setIsClearingCache] = useState(false)
   const [correctionsDict, setCorrectionsDict] = useState<Record<string, string> | undefined>(undefined)
+  const [showEditView, setShowEditView] = useState(false)
+  const [suggestedSprintId, setSuggestedSprintId] = useState<string | null>(null)
+  const [suggestedAssigneeId, setSuggestedAssigneeId] = useState<string | null>(null)
+  const [suggestedTimeEstimate, setSuggestedTimeEstimate] = useState<string | null>(null)
 
   const clientRef = useRef<WisprFlowClient | null>(null)
 
@@ -154,6 +159,9 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
           title?: string
           objective?: string
           acceptanceCriteria?: string
+          suggestedSprintId?: string | null
+          suggestedAssigneeId?: string | null
+          suggestedTimeEstimate?: string | null
         } = await response.json()
 
         const newDraft: TaskDraft = {
@@ -167,7 +175,16 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
         setTaskDraft(newDraft)
         setTaskInfo(null)
         setErrorMessage(null)
-        setStatus(intent === "edit" ? "Updated summary with your edits." : "Summary ready. Review before creating the task.")
+        setSuggestedSprintId(payload.suggestedSprintId || null)
+        setSuggestedAssigneeId(payload.suggestedAssigneeId || null)
+        setSuggestedTimeEstimate(payload.suggestedTimeEstimate || null)
+
+        // If this is a create operation (not edit), show edit view
+        if (intent === "create") {
+          setShowEditView(true)
+        } else {
+          setStatus("Updated summary with your edits.")
+        }
         setDraftHistory((previousHistory) => {
           if (intent === "create" || previousHistory.length === 0) {
             return [
@@ -324,6 +341,22 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
     }
   }, [captureIntent, mode, startSession, stopSession])
 
+  const handleProcessText = useCallback(async () => {
+    if (!transcript.trim()) {
+      setErrorMessage("Please enter some text or record audio first.")
+      return
+    }
+
+    setIsProcessingSummary(true)
+    setErrorMessage(null)
+    await sendToBackend({
+      transcript: transcript.trim(),
+      mode: "create",
+      baseDraft: null,
+      history: [],
+    })
+  }, [transcript, sendToBackend])
+
   const buttonLabel =
     mode === "recording" ? (captureIntent === "edit" ? "Recording edit..." : "Stop recording") : mode === "finalizing" ? "Processing..." : mode === "connecting" ? "Connecting..." : "Start recording"
   const buttonSubtext =
@@ -374,7 +407,15 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
     setDraftHistory([])
     setIsProcessingSummary(false)
     setEditButtonState("idle")
+    setShowEditView(false)
+    setSuggestedSprintId(null)
+    setSuggestedAssigneeId(null)
+    setSuggestedTimeEstimate(null)
   }, [resetClient])
+
+  const handleBackFromEdit = useCallback(() => {
+    setShowEditView(false)
+  }, [])
 
   const handleEditDraft = useCallback(async () => {
     if (!taskDraft) {
@@ -469,6 +510,24 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
     }
   }, [isClearingCache])
 
+  // Show edit view if we have a draft and are in create mode
+  if (showEditView && taskDraft) {
+    return (
+      <TaskEditView
+        initialDraft={{
+          title: taskDraft.title,
+          objective: taskDraft.objective,
+          acceptanceCriteria: taskDraft.acceptanceCriteria,
+        }}
+        suggestedSprintId={suggestedSprintId}
+        suggestedAssigneeId={suggestedAssigneeId}
+        suggestedTimeEstimate={suggestedTimeEstimate}
+        onBack={handleBackFromEdit}
+        transcript={transcript}
+      />
+    )
+  }
+
   return (
     <>
       <AppHeader title="ClickUp Task Creator" onBack={onBack} />
@@ -493,6 +552,16 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
                 </span>
                 <span className="whitespace-nowrap">{buttonLabel}</span>
               </button>
+              {transcript.trim() && mode === "idle" && !formattedOutput && (
+                <button
+                  type="button"
+                  onClick={handleProcessText}
+                  disabled={isProcessingSummary}
+                  className="flex w-full items-center justify-center gap-3 rounded-full bg-emerald-600 px-8 py-4 text-lg font-semibold text-white transition hover:bg-emerald-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
+                >
+                  {isProcessingSummary ? "Processing..." : "Process Text"}
+                </button>
+              )}
               <p className="text-center text-sm text-zinc-400 sm:text-left" aria-live="polite">
                 {buttonSubtext}
               </p>
@@ -506,8 +575,20 @@ export function TaskCreator({ onBack }: { onBack: () => void }) {
 
             <div className="mt-6 grid gap-4 lg:grid-cols-2">
               <article className="min-h-[160px] rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm text-zinc-200">
-                <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Live transcript</h2>
-                <SelectableTranscript transcript={transcript} className="whitespace-pre-wrap leading-relaxed" />
+                <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Live transcript / Text input</h2>
+                <textarea
+                  value={transcript}
+                  onChange={(e) => setTranscript(e.target.value)}
+                  onFocus={() => {
+                    // If not recording, allow editing
+                    if (mode !== "recording" && mode !== "connecting" && mode !== "finalizing") {
+                      // Text area is editable
+                    }
+                  }}
+                  disabled={mode === "recording" || mode === "connecting" || mode === "finalizing"}
+                  className="w-full min-h-[120px] rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-70"
+                  placeholder="Type here or use the microphone button to record..."
+                />
               </article>
 
               <article className="flex min-h-[160px] flex-col rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm leading-relaxed text-zinc-100">

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type SVGProps } from "react"
 
 import { AppHeader } from "@/components/AppHeader"
 import { SelectableTranscript } from "@/components/SelectableTranscript"
+import { TaskEditView } from "@/components/TaskEditView"
 import { loadCorrectionsFromFirebase } from "@/lib/wisprCorrections"
 import { WisprFlowClient } from "@/lib/wisprFlowClient"
 import { type FirebaseTaskWithId } from "@/lib/firebaseTasks"
@@ -45,11 +46,49 @@ export function TaskDetailView({
   task,
   onBack,
   onTaskCreated,
+  onTaskDiscarded,
 }: {
   task: FirebaseTaskWithId
   onBack: () => void
   onTaskCreated: (taskId: string, clickupTaskUrl: string) => Promise<void>
+  onTaskDiscarded?: (taskId: string) => Promise<void>
 }) {
+  const [isDiscarding, setIsDiscarding] = useState(false)
+
+  // This callback will navigate back to the list when task is created
+  const handleBackToList = useCallback(() => {
+    onBack() // This will call handleBackFromDetail in FirebaseTasksManager
+  }, [onBack])
+
+  const handleDiscardTask = useCallback(async () => {
+    if (!confirm("¿Estás seguro de que quieres descartar esta tarea? No se creará ninguna tarea en ClickUp.")) {
+      return
+    }
+
+    setIsDiscarding(true)
+    try {
+      if (onTaskDiscarded) {
+        // Use the callback from FirebaseTasksManager which will reload tasks and navigate
+        await onTaskDiscarded(task.id)
+      } else {
+        // Fallback: just navigate back (shouldn't happen in normal flow)
+        onBack()
+      }
+    } catch (err) {
+      console.error("Failed to discard task", err)
+      alert("Error al descartar la tarea. Por favor, intenta de nuevo.")
+      setIsDiscarding(false)
+    }
+  }, [task.id, onBack, onTaskDiscarded])
+
+  const TrashIcon = (props: SVGProps<SVGSVGElement>) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M3 6h18" />
+      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+    </svg>
+  )
+
   const [status, setStatus] = useState("Ready to capture additional details for this task.")
   const [transcript, setTranscript] = useState("")
   const [mode, setMode] = useState<Mode>("idle")
@@ -63,8 +102,17 @@ export function TaskDetailView({
   const [editButtonState, setEditButtonState] = useState<"idle" | "starting" | "recording" | "processing">("idle")
   const [isProcessingSummary, setIsProcessingSummary] = useState(false)
   const [correctionsDict, setCorrectionsDict] = useState<Record<string, string> | undefined>(undefined)
+  const [showEditView, setShowEditView] = useState(false)
+  const [suggestedSprintId, setSuggestedSprintId] = useState<string | null>(null)
+  const [suggestedAssigneeId, setSuggestedAssigneeId] = useState<string | null>(null)
+  const [suggestedTimeEstimate, setSuggestedTimeEstimate] = useState<string | null>(null)
 
   const clientRef = useRef<WisprFlowClient | null>(null)
+
+  // Scroll to top when component mounts
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" })
+  }, [])
 
   // Load corrections from Firebase on mount
   useEffect(() => {
@@ -176,6 +224,9 @@ export function TaskDetailView({
           title?: string
           objective?: string
           acceptanceCriteria?: string
+          suggestedSprintId?: string | null
+          suggestedAssigneeId?: string | null
+          suggestedTimeEstimate?: string | null
         } = await response.json()
 
         const newDraft: TaskDraft = {
@@ -189,7 +240,16 @@ export function TaskDetailView({
         setTaskDraft(newDraft)
         setTaskInfo(null)
         setErrorMessage(null)
-        setStatus(intent === "edit" ? "Updated summary with your edits." : "Summary ready. Review before creating the task.")
+        setSuggestedSprintId(payload.suggestedSprintId || null)
+        setSuggestedAssigneeId(payload.suggestedAssigneeId || null)
+        setSuggestedTimeEstimate(payload.suggestedTimeEstimate || null)
+
+        // If this is a create operation (not edit), show edit view
+        if (intent === "create") {
+          setShowEditView(true)
+        } else {
+          setStatus("Updated summary with your edits.")
+        }
         setDraftHistory((previousHistory) => {
           if (intent === "create" || previousHistory.length === 0) {
             return [
@@ -396,7 +456,31 @@ export function TaskDetailView({
     setDraftHistory([])
     setIsProcessingSummary(false)
     setEditButtonState("idle")
+    setShowEditView(false)
+    setSuggestedSprintId(null)
+    setSuggestedAssigneeId(null)
+    setSuggestedTimeEstimate(null)
   }, [resetClient])
+
+  const handleBackFromEdit = useCallback(() => {
+    setShowEditView(false)
+  }, [])
+
+  const handleProcessText = useCallback(async () => {
+    if (!transcript.trim()) {
+      setErrorMessage("Please enter some text or record audio first.")
+      return
+    }
+
+    setIsProcessingSummary(true)
+    setErrorMessage(null)
+    await sendToBackend({
+      transcript: transcript.trim(),
+      mode: "create",
+      baseDraft: null,
+      history: [],
+    })
+  }, [transcript, sendToBackend])
 
   const handleEditDraft = useCallback(async () => {
     if (!taskDraft) {
@@ -464,14 +548,50 @@ export function TaskDetailView({
     }
   }, [taskDraft, task.id, onTaskCreated, formatStatusMessage])
 
+  // Show edit view if we have a draft and are in create mode
+  if (showEditView && taskDraft) {
+    // Combine Firebase task text with transcript for display
+    const combinedTranscript = transcript.trim() ? `${task.text}\n\n${transcript.trim()}` : task.text
+
+    return (
+      <TaskEditView
+        initialDraft={{
+          title: taskDraft.title,
+          objective: taskDraft.objective,
+          acceptanceCriteria: taskDraft.acceptanceCriteria,
+        }}
+        suggestedSprintId={suggestedSprintId}
+        suggestedAssigneeId={suggestedAssigneeId}
+        suggestedTimeEstimate={suggestedTimeEstimate}
+        onBack={handleBackFromEdit}
+        onTaskCreated={onTaskCreated}
+        onBackToList={handleBackToList}
+        originalText={task.text}
+        firebaseTaskId={task.id}
+        transcript={combinedTranscript}
+      />
+    )
+  }
+
   return (
     <>
       <AppHeader title="Create ClickUp Task" onBack={onBack} />
       <main className="flex min-h-dvh flex-col items-center bg-white px-4 py-10 text-zinc-900 sm:px-6">
         <div className="w-full max-w-4xl space-y-8">
-          <div className="flex flex-col gap-3 text-center sm:text-left">
-            <h1 className="text-2xl font-semibold text-zinc-900">Firebase Task</h1>
-            <p className="text-base text-zinc-600">Add more details and convert this task to a ClickUp task.</p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-3 flex-1">
+              <h1 className="text-2xl font-semibold text-zinc-900">Firebase Task</h1>
+              <p className="text-base text-zinc-600">Add more details and convert this task to a ClickUp task.</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleDiscardTask}
+              disabled={isDiscarding}
+              className="flex items-center justify-center rounded-full border-2 border-red-500/40 bg-red-500/10 p-3 text-red-500 transition hover:border-red-500 hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Descartar tarea"
+            >
+              {isDiscarding ? <span className="h-5 w-5 animate-spin rounded-full border-2 border-red-500 border-t-transparent" /> : <TrashIcon className="h-5 w-5" />}
+            </button>
           </div>
 
           <section className="rounded-3xl border border-zinc-900/80 bg-zinc-950 p-6 shadow-[0_25px_120px_rgba(0,0,0,0.45)] sm:p-8">
@@ -496,6 +616,16 @@ export function TaskDetailView({
                 </span>
                 <span className="whitespace-nowrap">{buttonLabel}</span>
               </button>
+              {transcript.trim() && mode === "idle" && !formattedOutput && (
+                <button
+                  type="button"
+                  onClick={handleProcessText}
+                  disabled={isProcessingSummary}
+                  className="flex w-full items-center justify-center gap-3 rounded-full bg-emerald-600 px-8 py-4 text-lg font-semibold text-white transition hover:bg-emerald-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
+                >
+                  {isProcessingSummary ? "Processing..." : "Process Text"}
+                </button>
+              )}
               <p className="text-center text-sm text-zinc-400 sm:text-left" aria-live="polite">
                 {buttonSubtext}
               </p>
@@ -509,8 +639,14 @@ export function TaskDetailView({
 
             <div className="mt-6 grid gap-4 lg:grid-cols-2">
               <article className="min-h-[160px] rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm text-zinc-200">
-                <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Live transcript</h2>
-                <SelectableTranscript transcript={transcript} className="whitespace-pre-wrap leading-relaxed" />
+                <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-400">Live transcript / Text input</h2>
+                <textarea
+                  value={transcript}
+                  onChange={(e) => setTranscript(e.target.value)}
+                  disabled={mode === "recording" || mode === "connecting" || mode === "finalizing"}
+                  className="w-full min-h-[120px] rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-70"
+                  placeholder="Type here or use the microphone button to record..."
+                />
               </article>
 
               <article className="flex min-h-[160px] flex-col rounded-2xl border border-zinc-800/70 bg-zinc-900 p-4 text-sm leading-relaxed text-zinc-100">

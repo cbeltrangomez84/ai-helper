@@ -1,14 +1,17 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import {
-  getBackEnGeneralListIdFromConfig,
-  getNextSprintFromConfig,
-} from "@/lib/firebaseSprintConfig"
+import { getBackEnGeneralListIdFromConfig, getNextSprintFromConfig } from "@/lib/firebaseSprintConfig"
 
 type ClickUpTaskPayload = {
   title?: string
   objective?: string
   acceptanceCriteria?: string
+  primaryListId?: string | null
+  assigneeId?: string | null
+  sprintId?: string | null
+  startDate?: number | null
+  dueDate?: number | null
+  timeEstimate?: string | null
 }
 
 type ClickUpTaskResponse = {
@@ -31,8 +34,65 @@ function buildTaskDescription(title: string, objective: string, acceptanceCriter
   return sections.join("\n")
 }
 
+/**
+ * Parse time estimate string to milliseconds
+ * Supports formats like: "2h", "30m", "1d", "2h 30m", "1.5 horas", "1,5 horas", etc.
+ * Handles decimal hours (e.g., 1.5 horas = 1h 30m = 5400000 ms)
+ */
+function parseTimeEstimate(timeStr: string): number {
+  const timeStrLower = timeStr.toLowerCase().trim()
+  let totalMs = 0
+
+  console.log(`[ClickUp] Parsing time estimate: "${timeStr}"`)
+
+  // First, try to match combined format: "1h 30m", "2h 15m", etc.
+  const combinedMatch = timeStrLower.match(/(\d+)\s*h(?:\s+(\d+)\s*m)?/)
+  if (combinedMatch) {
+    const hours = parseInt(combinedMatch[1], 10)
+    const minutes = combinedMatch[2] ? parseInt(combinedMatch[2], 10) : 0
+    totalMs = hours * 60 * 60 * 1000 + minutes * 60 * 1000
+    console.log(`[ClickUp] Matched combined format: ${hours}h ${minutes}m = ${totalMs} ms`)
+    return totalMs
+  }
+
+  // Try to match decimal hours: "1.5 horas", "1,5 horas", "1.5h", etc.
+  const decimalHourMatch = timeStrLower.match(/(\d+[,.]\d+)\s*(?:horas?|h(?:\s|$))/)
+  if (decimalHourMatch) {
+    const hours = parseFloat(decimalHourMatch[1].replace(",", "."))
+    const wholeHours = Math.floor(hours)
+    const minutes = Math.round((hours - wholeHours) * 60)
+    totalMs = wholeHours * 60 * 60 * 1000 + minutes * 60 * 1000
+    console.log(`[ClickUp] Matched decimal format: ${hours} hours = ${wholeHours}h ${minutes}m = ${totalMs} ms`)
+    return totalMs
+  }
+
+  // Match patterns like "2h", "30m", "1d" (simple formats)
+  const hourMatch = timeStrLower.match(/(\d+)\s*h(?:\s|$)/)
+  const minuteMatch = timeStrLower.match(/(\d+)\s*m(?:\s|$)/)
+  const dayMatch = timeStrLower.match(/(\d+)\s*d(?:\s|$)/)
+
+  if (dayMatch) {
+    const days = parseInt(dayMatch[1], 10)
+    totalMs += days * 24 * 60 * 60 * 1000
+    console.log(`[ClickUp] Matched days: ${days}d`)
+  }
+  if (hourMatch) {
+    const hours = parseInt(hourMatch[1], 10)
+    totalMs += hours * 60 * 60 * 1000
+    console.log(`[ClickUp] Matched hours: ${hours}h`)
+  }
+  if (minuteMatch) {
+    const minutes = parseInt(minuteMatch[1], 10)
+    totalMs += minutes * 60 * 1000
+    console.log(`[ClickUp] Matched minutes: ${minutes}m`)
+  }
+
+  console.log(`[ClickUp] Final parsed time: ${totalMs} ms`)
+  return totalMs
+}
+
 export async function POST(request: NextRequest) {
-  const { title, objective, acceptanceCriteria }: ClickUpTaskPayload = await request.json()
+  const { title, objective, acceptanceCriteria, primaryListId, assigneeId, sprintId, startDate, dueDate, timeEstimate }: ClickUpTaskPayload = await request.json()
 
   if (!title?.trim()) {
     return NextResponse.json(
@@ -67,19 +127,61 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Get "Back en general" list ID from Firebase config
+    // Determine primary list ID (use provided, then config, then default)
     const backEnGeneralListId = await getBackEnGeneralListIdFromConfig()
-    const listId = backEnGeneralListId || process.env.CLICKUP_LIST_ID || DEFAULT_CLICKUP_LIST_ID
+    const listId = primaryListId || backEnGeneralListId || process.env.CLICKUP_LIST_ID || DEFAULT_CLICKUP_LIST_ID
 
-    if (!backEnGeneralListId) {
-      console.warn("[ClickUp] 'Back en general' list ID not found in config, falling back to default list")
+    if (!primaryListId && !backEnGeneralListId) {
+      console.warn("[ClickUp] Primary list ID not provided and 'Back en general' list ID not found in config, falling back to default list")
     }
 
-    // Create the task
-    const taskBody = {
+    // Parse time estimate to milliseconds
+    let timeEstimateMs: number | null = null
+    if (timeEstimate) {
+      timeEstimateMs = parseTimeEstimate(timeEstimate.trim())
+      console.log(`[ClickUp] Time estimate input: "${timeEstimate}", parsed to: ${timeEstimateMs} ms`)
+      if (timeEstimateMs === 0) {
+        console.warn(`[ClickUp] Time estimate parsed to 0, this might be invalid. Original input: "${timeEstimate}"`)
+        timeEstimateMs = null // Don't send 0, as it might be invalid
+      }
+    }
+
+    // Create the task in primary list
+    const taskBody: {
+      name: string
+      markdown_description: string
+      tags: string[]
+      assignees?: string[]
+      start_date?: number
+      due_date?: number
+      time_estimate?: number
+    } = {
       name: title.trim(),
       markdown_description: buildTaskDescription(title, objective, acceptanceCriteria ?? ""),
       tags: [],
+    }
+
+    // Add assignee if provided
+    if (assigneeId) {
+      taskBody.assignees = [assigneeId]
+    }
+
+    // Add start date if provided
+    if (startDate) {
+      taskBody.start_date = startDate
+    }
+
+    // Add due date if provided
+    if (dueDate) {
+      taskBody.due_date = dueDate
+    }
+
+    // Add time estimate if provided
+    if (timeEstimateMs !== null && timeEstimateMs > 0) {
+      taskBody.time_estimate = timeEstimateMs
+      console.log(`[ClickUp] Adding time_estimate to task body: ${timeEstimateMs} ms`)
+    } else {
+      console.log(`[ClickUp] No time estimate to add (timeEstimateMs: ${timeEstimateMs})`)
     }
 
     const createResponse = await fetch(`https://api.clickup.com/api/v2/list/${listId}/task`, {
@@ -115,21 +217,108 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Get next sprint from Firebase config and update task
+    // Update task with sprint (as secondary list) and other parameters if needed
     try {
-      const nextSprint = await getNextSprintFromConfig()
+      const updateBody: {
+        assignees?: string[]
+        start_date?: number
+        due_date?: number
+        time_estimate?: number
+      } = {}
 
-      if (nextSprint && nextSprint.firstMonday) {
-        // Update task to add sprint and set start date
-        const updateBody: {
+      // Add assignee if not already set in creation
+      if (assigneeId && !taskBody.assignees) {
+        updateBody.assignees = [assigneeId]
+      }
+
+      // Add start date if not already set in creation
+      if (startDate && !taskBody.start_date) {
+        updateBody.start_date = startDate
+      }
+
+      // Add due date if not already set in creation
+      if (dueDate && !taskBody.due_date) {
+        updateBody.due_date = dueDate
+      }
+
+      // Add time estimate if not already set in creation
+      if (timeEstimateMs !== null && !taskBody.time_estimate) {
+        updateBody.time_estimate = timeEstimateMs
+      }
+
+      // If sprint is provided, add it as secondary list and set sprint_id
+      if (sprintId) {
+        // Update task with sprint_id, start_date, and due_date
+        const sprintUpdateBody: {
           sprint_id?: string
           start_date?: number
-          date_created?: number
+          due_date?: number
+          assignees?: string[]
+          time_estimate?: number
         } = {
-          sprint_id: nextSprint.id,
-          start_date: nextSprint.firstMonday,
+          sprint_id: sprintId,
         }
 
+        if (startDate) {
+          sprintUpdateBody.start_date = startDate
+        }
+
+        if (dueDate) {
+          sprintUpdateBody.due_date = dueDate
+        }
+
+        // Add assignee if provided and not already set
+        if (assigneeId && !taskBody.assignees) {
+          sprintUpdateBody.assignees = [assigneeId]
+        }
+
+        // Add time estimate if provided and not already set
+        if (timeEstimateMs !== null && !taskBody.time_estimate) {
+          sprintUpdateBody.time_estimate = timeEstimateMs
+        }
+
+        const sprintUpdateResponse = await fetch(`https://api.clickup.com/api/v2/task/${task.id}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: apiToken,
+          },
+          body: JSON.stringify(sprintUpdateBody),
+        })
+
+        if (!sprintUpdateResponse.ok) {
+          const errorText = await sprintUpdateResponse.text()
+          console.warn("[ClickUp] Failed to update task with sprint:", errorText)
+        } else {
+          console.log(`[ClickUp] Task ${task.id} updated with sprint ${sprintId}`)
+        }
+
+        // Also add task to sprint list as secondary list (if sprintId is a list ID)
+        // Note: In ClickUp, sprints can be folders or lists. If it's a list, we add the task to it
+        try {
+          const addToListResponse = await fetch(`https://api.clickup.com/api/v2/list/${sprintId}/task/${task.id}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: apiToken,
+            },
+            body: JSON.stringify({}),
+          })
+
+          if (addToListResponse.ok) {
+            console.log(`[ClickUp] Task ${task.id} also added to sprint list ${sprintId} as secondary list`)
+          } else {
+            // This is OK - sprint might not be a list, or task might already be in the list
+            console.log(`[ClickUp] Note: Could not add task to sprint list (this is OK if sprint is not a list)`)
+          }
+        } catch (listError) {
+          // This is OK - sprint might not be a list
+          console.log(`[ClickUp] Note: Could not add task to sprint list (this is OK if sprint is not a list)`)
+        }
+      }
+
+      // Apply other updates if needed
+      if (Object.keys(updateBody).length > 0) {
         const updateResponse = await fetch(`https://api.clickup.com/api/v2/task/${task.id}`, {
           method: "PUT",
           headers: {
@@ -141,18 +330,12 @@ export async function POST(request: NextRequest) {
 
         if (!updateResponse.ok) {
           const errorText = await updateResponse.text()
-          console.warn("[ClickUp] Failed to update task with sprint and date:", errorText)
-          // Don't fail the whole request if sprint update fails
-        } else {
-          const firstMondayDate = new Date(nextSprint.firstMonday)
-          console.log(`[ClickUp] Task ${task.id} added to sprint ${nextSprint.name} with start date ${firstMondayDate.toISOString()}`)
+          console.warn("[ClickUp] Failed to update task:", errorText)
         }
-      } else {
-        console.warn("[ClickUp] No next sprint found, task created without sprint assignment")
       }
-    } catch (sprintError) {
-      console.error("[ClickUp] Error updating task with sprint:", sprintError)
-      // Don't fail the whole request if sprint logic fails
+    } catch (updateError) {
+      console.error("[ClickUp] Error updating task:", updateError)
+      // Don't fail the whole request if update fails
     }
 
     return NextResponse.json({

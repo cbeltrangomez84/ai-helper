@@ -98,3 +98,33 @@ export async function moveTaskToCompleted(taskId: string, clickupTaskUrl: string
   await remove(taskRef)
 }
 
+export async function discardTask(taskId: string): Promise<void> {
+  await authenticateFirebase()
+
+  const database = getFirebaseDatabase()
+  const taskRef = ref(database, `tasks/${taskId}`)
+  const completedTasksRef = ref(database, "completedTasks")
+
+  // Get the task data
+  const snapshot = await get(taskRef)
+  if (!snapshot.exists()) {
+    throw new Error(`Task with id ${taskId} not found`)
+  }
+
+  const taskData = snapshot.val() as FirebaseTask
+
+  // Create completed task without ClickUp URL (discarded)
+  const completedTask: CompletedTask = {
+    ...taskData,
+    completed: true,
+    completedAt: Date.now(),
+    clickupTaskUrl: "", // Empty URL indicates task was discarded
+  }
+
+  // Add to completedTasks
+  const newCompletedTaskRef = push(completedTasksRef)
+  await set(newCompletedTaskRef, completedTask)
+
+  // Remove from tasks
+  await remove(taskRef)
+}
