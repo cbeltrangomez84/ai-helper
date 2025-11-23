@@ -86,8 +86,8 @@ function extractTimeEstimate(text: string): string | null {
 
   // IMPORTANT: Check "horas y media" FIRST before checking simple decimal hours
   // Match "X horas y media" or "X hora y media": "3 horas y media", "tres horas y media", "3h y media", etc.
-  // Also match "X horas y media" with more flexible spacing
-  const horasYMediaMatch = textLower.match(/(\d+|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s*(?:horas?|h)\s+y\s+media/)
+  // Use more flexible regex to handle various spacing
+  const horasYMediaMatch = textLower.match(/(\d+|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s*(?:horas?|h)\s*[y]\s*media/)
   if (horasYMediaMatch) {
     let hours = 0
     const matchText = horasYMediaMatch[1]
@@ -110,8 +110,40 @@ function extractTimeEstimate(text: string): string | null {
     } else {
       hours = parseInt(matchText, 10)
     }
-    console.log(`[Wispr] Matched "horas y media": ${matchText} -> ${hours}h 30m`)
+    console.log(`[Wispr] Matched "horas y media": "${matchText}" -> ${hours}h 30m`)
     return `${hours}h 30m`
+  }
+
+  // Also check for "y media" pattern more broadly
+  if (textLower.includes("y media") && !textLower.includes("hora y media")) {
+    // Try to extract number before "y media"
+    const beforeYMedia = textLower.split("y media")[0].trim()
+    const numberMatch = beforeYMedia.match(/(\d+|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s*(?:horas?|h)/)
+    if (numberMatch) {
+      let hours = 0
+      const matchText = numberMatch[1]
+      if (matchText === "tres") {
+        hours = 3
+      } else if (matchText === "cuatro") {
+        hours = 4
+      } else if (matchText === "cinco") {
+        hours = 5
+      } else if (matchText === "seis") {
+        hours = 6
+      } else if (matchText === "siete") {
+        hours = 7
+      } else if (matchText === "ocho") {
+        hours = 8
+      } else if (matchText === "nueve") {
+        hours = 9
+      } else if (matchText === "diez") {
+        hours = 10
+      } else {
+        hours = parseInt(matchText, 10)
+      }
+      console.log(`[Wispr] Matched "y media" pattern: "${matchText}" -> ${hours}h 30m`)
+      return `${hours}h 30m`
+    }
   }
 
   // Match decimal hours: "1.5 horas", "1,5 horas", "2 horas" (but NOT "X horas y media")
@@ -346,7 +378,12 @@ export async function POST(request: NextRequest) {
         const contentToAnalyze = `${transcribedInput || text} ${sections.title} ${sections.objective} ${sections.acceptanceCriteria}`.toLowerCase()
 
         // Extract time estimate from content
-        suggestedTimeEstimate = extractTimeEstimate(transcribedInput || text || "")
+        const timeEstimateText = transcribedInput || text || ""
+        suggestedTimeEstimate = extractTimeEstimate(timeEstimateText)
+        if (timeEstimateText) {
+          console.log(`[Wispr] Extracting time estimate from text (first 200 chars): "${timeEstimateText.substring(0, 200)}"`)
+          console.log(`[Wispr] Extracted time estimate: ${suggestedTimeEstimate}`)
+        }
 
         // Suggest sprint
         if (sprintConfig && sprintConfig.sprints) {

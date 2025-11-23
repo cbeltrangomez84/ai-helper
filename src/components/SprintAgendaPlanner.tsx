@@ -480,6 +480,79 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
     [drawerTask, updateTaskOnServer]
   )
 
+  const handleMoveToNextSprint = useCallback(async () => {
+    if (!drawerTask || !selectedSprint) {
+      return
+    }
+
+    // Find next sprint
+    const sortedSprints = [...sprints].sort((a, b) => {
+      const aDate = a.startDate || 0
+      const bDate = b.startDate || 0
+      return aDate - bDate
+    })
+
+    const currentIndex = sortedSprints.findIndex((s) => s.id === selectedSprint.id)
+    if (currentIndex === -1 || currentIndex === sortedSprints.length - 1) {
+      setBanner({ type: "error", message: "No hay un sprint siguiente disponible." })
+      return
+    }
+
+    const nextSprint = sortedSprints[currentIndex + 1]
+    if (!nextSprint.listId) {
+      setBanner({ type: "error", message: "El siguiente sprint no tiene lista configurada." })
+      return
+    }
+
+    if (!selectedSprint.listId) {
+      setBanner({ type: "error", message: "El sprint actual no tiene lista configurada." })
+      return
+    }
+
+    // Get next sprint's first Monday
+    const nextSprintFirstMonday = nextSprint.firstMonday || nextSprint.startDate
+    if (!nextSprintFirstMonday) {
+      setBanner({ type: "error", message: "El siguiente sprint no tiene fecha de inicio configurada." })
+      return
+    }
+
+    setDrawerSaving(true)
+    setDrawerError(null)
+    try {
+      const response = await fetch("/api/clickup/sprint-planner", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskId: drawerTask.id,
+          currentSprintListId: selectedSprint.listId,
+          nextSprintListId: nextSprint.listId,
+          nextSprintFirstMonday,
+          currentSprintStartDate: selectedSprint.startDate,
+          currentSprintEndDate: selectedSprint.endDate,
+          taskDueDate: drawerTask.dueDate,
+        }),
+      })
+
+      const data = await response.json()
+      if (!response.ok || !data.ok) {
+        throw new Error(data?.message || "No pudimos mover la tarea al siguiente sprint.")
+      }
+
+      // Remove task from current sprint's tasks
+      setAllSprintTasks((prev) => {
+        return prev.filter((t) => t.id !== drawerTask.id)
+      })
+
+      setDrawerTask(null)
+      setBanner({ type: "success", message: `Tarea movida al ${nextSprint.name}.` })
+    } catch (error) {
+      console.error("[SprintAgenda] Failed to move task to next sprint:", error)
+      setDrawerError(error instanceof Error ? error.message : "No pudimos mover la tarea al siguiente sprint.")
+    } finally {
+      setDrawerSaving(false)
+    }
+  }, [drawerTask, selectedSprint, sprints])
+
   const isDataLoading = membersLoading || sprintsLoading
   const showEmptyState = !tasksLoading && tasks.length === 0 && !tasksError && selectedMemberId && selectedSprintId
 
@@ -726,6 +799,8 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
           error={drawerError}
           onClose={() => setDrawerTask(null)}
           onSave={handleDrawerSave}
+          onMoveToNextSprint={handleMoveToNextSprint}
+          canMoveToNextSprint={selectedSprint !== null && sprints.length > 0}
         />
       )}
     </>
@@ -825,6 +900,8 @@ function TaskEditorDrawer({
   error,
   onClose,
   onSave,
+  onMoveToNextSprint,
+  canMoveToNextSprint,
 }: {
   task: PlannerTask
   members: TeamMember[]
@@ -834,6 +911,8 @@ function TaskEditorDrawer({
   error: string | null
   onClose: () => void
   onSave: (payload: DrawerSubmitPayload) => Promise<void>
+  onMoveToNextSprint?: () => void
+  canMoveToNextSprint?: boolean
 }) {
   const [name, setName] = useState(task.name)
   const [objective, setObjective] = useState(task.objective)
@@ -889,8 +968,8 @@ function TaskEditorDrawer({
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-black/60 px-4 py-6 sm:items-center sm:justify-center sm:px-6">
       <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
-      <div className="relative z-10 w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl sm:p-8">
-        <div className="flex items-center justify-between gap-3">
+      <div className="relative z-10 w-full max-w-xl max-h-[90vh] rounded-3xl bg-white shadow-2xl flex flex-col overflow-hidden">
+        <div className="flex-shrink-0 flex items-center justify-between gap-3 p-6 sm:p-8 border-b border-zinc-200">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{task.status || "Sin estado"}</p>
             <h2 className="text-xl font-semibold text-zinc-900">Editar tarea</h2>
@@ -903,7 +982,7 @@ function TaskEditorDrawer({
             ✕
           </button>
         </div>
-        <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
+        <form className="flex-1 overflow-y-auto p-6 sm:p-8 space-y-4" onSubmit={handleSubmit}>
           <div className="space-y-1">
             <label className="text-sm font-medium text-zinc-700">Título</label>
             <input
@@ -981,6 +1060,22 @@ function TaskEditorDrawer({
           </div>
 
           {(localError || error) && <ErrorBanner message={localError || error || ""} />}
+
+          {canMoveToNextSprint && onMoveToNextSprint && (
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+              <button
+                type="button"
+                onClick={onMoveToNextSprint}
+                disabled={isSaving}
+                className="w-full rounded-full border border-blue-300 bg-blue-100 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-200 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {isSaving ? "Moviendo..." : "Mover al siguiente sprint"}
+              </button>
+              <p className="mt-2 text-xs text-blue-600">
+                Esto moverá la tarea al siguiente sprint y la programará para el primer lunes.
+              </p>
+            </div>
+          )}
 
           <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
             {task.url && (

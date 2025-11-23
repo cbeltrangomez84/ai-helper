@@ -484,3 +484,187 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ ok: false, message: "Unexpected error while updating the task." }, { status: 500 })
   }
 }
+
+export async function POST(request: NextRequest) {
+  let payload: {
+    taskId: string
+    currentSprintListId: string
+    nextSprintListId: string
+    nextSprintFirstMonday: number
+    currentSprintStartDate: number | null
+    currentSprintEndDate: number | null
+    taskDueDate: number | null
+  }
+  try {
+    payload = (await request.json()) as typeof payload
+  } catch (error) {
+    return NextResponse.json({ ok: false, message: "Invalid JSON payload." }, { status: 400 })
+  }
+
+  if (!payload?.taskId || !payload.currentSprintListId || !payload.nextSprintListId) {
+    return NextResponse.json({ ok: false, message: "taskId, currentSprintListId, and nextSprintListId are required." }, { status: 400 })
+  }
+
+  try {
+    const token = getClickUpToken()
+
+    // 1. First, fetch the task to see its current structure
+    const taskResponse = await fetch(`${CLICKUP_API_BASE}/task/${payload.taskId}?include_location=true`, {
+      headers: {
+        Authorization: token,
+      },
+    })
+
+    if (!taskResponse.ok) {
+      throw new Error("Failed to fetch current task.")
+    }
+
+    const currentTask = (await taskResponse.json()) as ClickUpTask
+    const currentSprintListIdStr = String(payload.currentSprintListId)
+    const isPrimaryList = String(currentTask.list?.id || currentTask.list_id || "") === currentSprintListIdStr
+
+    // 2. Remove task from current sprint list (only if it's a secondary location)
+    // If it's the primary list, we need to change the primary list first
+    if (!isPrimaryList) {
+      // It's a secondary location, safe to remove
+      try {
+        const removeResponse = await fetch(`${CLICKUP_API_BASE}/list/${payload.currentSprintListId}/task/${payload.taskId}`, {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: token,
+          },
+        })
+
+        if (!removeResponse.ok) {
+          const errorText = await removeResponse.text()
+          console.warn(`[SprintPlanner] Could not remove task from current sprint list: ${errorText}`)
+        } else {
+          console.log(`[SprintPlanner] Removed task ${payload.taskId} from sprint list ${payload.currentSprintListId} (secondary location)`)
+        }
+      } catch (error) {
+        console.warn(`[SprintPlanner] Error removing task from current sprint list:`, error)
+      }
+    } else {
+      // It's the primary list - we need to get the backend general list to set as primary
+      const backEnGeneralListId = await getBackEnGeneralListIdFromConfig()
+      if (backEnGeneralListId) {
+        // Move task to backend general list as primary, then remove from sprint list
+        try {
+          // First, add to backend general list (this will make it primary if task is moved)
+          const moveToGeneralResponse = await fetch(`${CLICKUP_API_BASE}/list/${backEnGeneralListId}/task/${payload.taskId}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: token,
+            },
+            body: JSON.stringify({}),
+          })
+
+          if (moveToGeneralResponse.ok) {
+            console.log(`[SprintPlanner] Moved task ${payload.taskId} to backend general list as primary`)
+            
+            // Now remove from current sprint list (it should be secondary now)
+            const removeResponse = await fetch(`${CLICKUP_API_BASE}/list/${payload.currentSprintListId}/task/${payload.taskId}`, {
+              method: "DELETE",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: token,
+              },
+            })
+
+            if (removeResponse.ok) {
+              console.log(`[SprintPlanner] Removed task ${payload.taskId} from sprint list ${payload.currentSprintListId}`)
+            }
+          }
+        } catch (error) {
+          console.warn(`[SprintPlanner] Error moving task from primary sprint list:`, error)
+        }
+      }
+    }
+
+    // 3. Add task to next sprint list as secondary location
+    try {
+      const addResponse = await fetch(`${CLICKUP_API_BASE}/list/${payload.nextSprintListId}/task/${payload.taskId}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token,
+        },
+        body: JSON.stringify({}),
+      })
+
+      if (!addResponse.ok) {
+        const errorText = await addResponse.text()
+        console.error(`[SprintPlanner] Failed to add task to next sprint list: ${errorText}`)
+        throw new Error("Failed to add task to next sprint list.")
+      }
+
+      console.log(`[SprintPlanner] Added task ${payload.taskId} to sprint list ${payload.nextSprintListId} as secondary location`)
+    } catch (error) {
+      console.error(`[SprintPlanner] Error adding task to next sprint list:`, error)
+      throw error
+    }
+
+    // 4. Update task dates only if task date is within current sprint range
+    // Check if task due date is within current sprint dates
+    const shouldUpdateDates =
+      payload.taskDueDate !== null &&
+      payload.currentSprintStartDate !== null &&
+      payload.currentSprintEndDate !== null &&
+      payload.taskDueDate >= payload.currentSprintStartDate &&
+      payload.taskDueDate <= payload.currentSprintEndDate
+
+    if (shouldUpdateDates) {
+      // Task is within sprint dates - move to next sprint's first Monday
+      const updateBody: Record<string, unknown> = {
+        due_date: payload.nextSprintFirstMonday,
+        start_date: payload.nextSprintFirstMonday,
+      }
+
+      const updateResponse = await fetch(`${CLICKUP_API_BASE}/task/${payload.taskId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token,
+        },
+        body: JSON.stringify(updateBody),
+      })
+
+      if (!updateResponse.ok) {
+        const errorText = await updateResponse.text()
+        console.error(`[SprintPlanner] Failed to update task dates: ${errorText}`)
+        throw new Error("Failed to update task dates.")
+      }
+
+      console.log(`[SprintPlanner] Updated task dates to next sprint's first Monday (task was within sprint range)`)
+    } else {
+      // Task is outside sprint dates - keep dates as they are
+      console.log(`[SprintPlanner] Task date is outside sprint range - keeping original dates`)
+    }
+
+    // 5. Fetch updated task
+    const updatedTaskResponse = await fetch(`${CLICKUP_API_BASE}/task/${payload.taskId}?include_location=true`, {
+      headers: {
+        Authorization: token,
+      },
+    })
+
+    if (!updatedTaskResponse.ok) {
+      throw new Error("Failed to fetch updated task.")
+    }
+
+    const updatedTask = (await updatedTaskResponse.json()) as ClickUpTask
+
+    return NextResponse.json({
+      ok: true,
+      task: mapClickUpTask(updatedTask),
+    })
+  } catch (error) {
+    console.error("[SprintPlanner] Unexpected error moving task to next sprint:", error)
+    return NextResponse.json(
+      { ok: false, message: error instanceof Error ? error.message : "Unexpected error while moving task to next sprint." },
+      { status: 500 }
+    )
+  }
+}
