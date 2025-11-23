@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 
 import { buildClickUpDescription, parseClickUpDescription } from "@/lib/clickupFormatting"
-import { loadSprintConfigFromFirebase, type SprintConfig } from "@/lib/firebaseSprintConfig"
+import { loadSprintConfigFromFirebase, getBackEnGeneralListIdFromConfig, type SprintConfig } from "@/lib/firebaseSprintConfig"
 
 const CLICKUP_API_BASE = "https://api.clickup.com/api/v2"
+
+// Control flag for step 3 (team-level search) - set to false during testing as it's very slow
+const ENABLE_TEAM_LEVEL_SEARCH = false
 
 type ClickUpTask = {
   id: string
@@ -24,6 +27,25 @@ type ClickUpTask = {
     id: string
     name: string
   }
+  list_id?: string
+  sprint?: {
+    id: string
+    name: string
+  } | null
+  sprint_id?: string | null
+  tags?: Array<{
+    name: string
+    tag_fg?: string
+    tag_bg?: string
+    creator?: number
+  }>
+  custom_id?: string | null
+  locations?: Array<{
+    list_id?: string
+    id?: string
+    folder_id?: string
+    space_id?: string
+  }>
 }
 
 type PlannerTask = {
@@ -89,6 +111,143 @@ function isDoneStatus(task: ClickUpTask): boolean {
   return status === "done" || status === "complete" || status === "closed" || type === "done"
 }
 
+/**
+ * Check if a task belongs to a sprint by verifying:
+ * 1. Primary list (home)
+ * 2. Secondary locations (locations array)
+ */
+function taskBelongsToSprint(task: ClickUpTask, sprintListId: string): boolean {
+  if (!sprintListId) return false
+
+  const sprintIdStr = String(sprintListId)
+
+  // Method 1: Check primary list (home)
+  const primaryListId = String(task.list?.id || task.list_id || "")
+  if (primaryListId === sprintIdStr) {
+    return true
+  }
+
+  // Method 2: Check secondary locations
+  if (Array.isArray(task.locations)) {
+    return task.locations.some((location) => {
+      const locationListId = String(location?.list_id || location?.id || "")
+      return locationListId === sprintIdStr
+    })
+  }
+
+  return false
+}
+
+/**
+ * Fetch all tasks from a list with pagination
+ */
+async function fetchTasksFromList(
+  listId: string,
+  token: string,
+  includeClosed: boolean = true
+): Promise<ClickUpTask[]> {
+  const tasks: ClickUpTask[] = []
+  let page = 0
+  let hasMore = true
+
+  while (hasMore) {
+    const query = new URLSearchParams({
+      page: String(page),
+      include_closed: String(includeClosed),
+      subtasks: "true",
+      order_by: "due_date",
+    })
+
+    const response = await fetch(`${CLICKUP_API_BASE}/list/${listId}/task?${query.toString()}`, {
+      headers: {
+        Authorization: token,
+      },
+      cache: "no-store",
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.warn(`[SprintPlanner] Failed to fetch page ${page} from list ${listId}: ${errorText}`)
+      break
+    }
+
+    const data = (await response.json()) as { tasks?: ClickUpTask[] }
+    const batch = Array.isArray(data.tasks) ? data.tasks : []
+
+    tasks.push(...batch)
+    hasMore = batch.length > 0
+    page++
+
+    // Safety limit to prevent infinite loops
+    if (page > 100) {
+      console.warn(`[SprintPlanner] Reached page limit (100) for list ${listId}`)
+      break
+    }
+  }
+
+  return tasks
+}
+
+/**
+ * Fetch tasks from team/workspace level with pagination
+ * CRITICAL: Must use include_location=true to get locations field
+ */
+async function fetchTasksFromTeam(
+  teamId: string,
+  token: string,
+  sprintListId: string,
+  maxPages: number = 20
+): Promise<ClickUpTask[]> {
+  const sprintTasks: ClickUpTask[] = []
+  const seenTaskIds = new Set<string>() // Avoid duplicates
+  let page = 0
+  let hasMore = true
+
+  while (hasMore && page < maxPages) {
+    const query = new URLSearchParams({
+      page: String(page),
+      include_closed: "true",
+      subtasks: "true",
+      include_location: "true", // CRITICAL: Without this, locations field won't be included
+      order_by: "created",
+    })
+
+    const response = await fetch(`${CLICKUP_API_BASE}/team/${teamId}/task?${query.toString()}`, {
+      headers: {
+        Authorization: token,
+      },
+      cache: "no-store",
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.warn(`[SprintPlanner] Failed to fetch page ${page} from team: ${errorText}`)
+      break
+    }
+
+    const data = (await response.json()) as { tasks?: ClickUpTask[] }
+    const batch = Array.isArray(data.tasks) ? data.tasks : []
+
+    for (const task of batch) {
+      const taskId = String(task.id)
+
+      // Avoid duplicates
+      if (seenTaskIds.has(taskId)) continue
+
+      // Check if task belongs to sprint
+      if (taskBelongsToSprint(task, sprintListId)) {
+        seenTaskIds.add(taskId)
+        sprintTasks.push(task)
+      }
+    }
+
+    hasMore = batch.length > 0
+    page++
+  }
+
+  return sprintTasks
+}
+
 async function getSprintMeta(sprintId: string): Promise<SprintConfig | null> {
   try {
     const config = await loadSprintConfigFromFirebase()
@@ -105,49 +264,126 @@ async function getSprintMeta(sprintId: string): Promise<SprintConfig | null> {
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const sprintId = searchParams.get("sprintId")
-  const assigneeId = searchParams.get("assigneeId")
+  const assigneeId = searchParams.get("assigneeId") // Optional - if not provided, return all tasks
   const includeDone = searchParams.get("includeDone") === "true"
+
+  console.log(`[SprintPlanner] Request received: sprintId=${sprintId}, assigneeId=${assigneeId || "ALL"}, includeDone=${includeDone}`)
 
   if (!sprintId) {
     return NextResponse.json({ ok: false, message: "sprintId is required." }, { status: 400 })
   }
 
-  if (!assigneeId) {
-    return NextResponse.json({ ok: false, message: "assigneeId is required." }, { status: 400 })
-  }
+  // assigneeId is now optional - if not provided, we return all tasks for the sprint
 
   try {
     const token = getClickUpToken()
-    const query = new URLSearchParams({
-      subtasks: "true",
-      order_by: "due_date",
-    })
-
-    const response = await fetch(`${CLICKUP_API_BASE}/list/${sprintId}/task?${query.toString()}`, {
-      headers: {
-        Authorization: token,
-      },
-      cache: "no-store",
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error("[SprintPlanner] ClickUp list fetch failed:", errorText)
-      return NextResponse.json({ ok: false, message: "Failed to load sprint tasks from ClickUp." }, { status: response.status })
+    
+    // Get the backend general list ID from config
+    const backEnGeneralListId = await getBackEnGeneralListIdFromConfig()
+    if (!backEnGeneralListId) {
+      return NextResponse.json(
+        { ok: false, message: "Backend general list ID not configured. Please sync sprints first." },
+        { status: 400 }
+      )
     }
 
-    const payload = (await response.json()) as { tasks?: ClickUpTask[] }
-    const tasks = Array.isArray(payload.tasks) ? payload.tasks : []
+    // Get sprint metadata
+    const sprintMeta = await getSprintMeta(sprintId)
+    const sprintName = sprintMeta?.name || null
+    const sprintListId = sprintMeta?.listId || sprintId // Use sprintId as fallback for listId
 
-    const filtered = tasks
-      .filter((task) => includeDone || !isDoneStatus(task))
-      .filter((task) => {
+    // Get team ID
+    const teamId = process.env.CLICKUP_TEAM_ID || process.env.CLICKUP_WORKSPACE_ID || "9011185797"
+
+    console.log(`[SprintPlanner] Fetching ALL tasks for sprint_id=${sprintId}${sprintName ? ` (${sprintName})` : ""}`)
+    console.log(`[SprintPlanner] Sprint list ID: ${sprintListId}`)
+    console.log(`[SprintPlanner] Backend general list ID: ${backEnGeneralListId}`)
+    console.log(`[SprintPlanner] Team ID: ${teamId}`)
+
+    // Strategy: Fetch from multiple sources and combine
+    const allTasks: ClickUpTask[] = []
+    const taskMap = new Map<string, boolean>() // Avoid duplicates
+
+    const addTask = (task: ClickUpTask) => {
+      const taskId = String(task.id)
+      if (!taskMap.has(taskId)) {
+        taskMap.set(taskId, true)
+        allTasks.push(task)
+      }
+    }
+
+    // 1. Fetch tasks directly from sprint list (primary location)
+    if (sprintListId) {
+      try {
+        console.log(`[SprintPlanner] [1/3] Fetching tasks directly from sprint list: ${sprintListId}`)
+        const directTasks = await fetchTasksFromList(sprintListId, token, true)
+        directTasks.forEach(addTask)
+        console.log(`[SprintPlanner] ✓ Found ${directTasks.length} tasks directly in sprint list`)
+      } catch (error) {
+        console.warn(`[SprintPlanner] Warning: Could not fetch direct sprint tasks:`, error instanceof Error ? error.message : String(error))
+      }
+    }
+
+    // 2. Fetch from backend general list and filter by locations
+    if (backEnGeneralListId) {
+      try {
+        console.log(`[SprintPlanner] [2/3] Fetching tasks from backend general list: ${backEnGeneralListId}`)
+        const backlogTasks = await fetchTasksFromList(backEnGeneralListId, token, true)
+        
+        // Filter tasks that belong to sprint (check locations)
+        const sprintTasksFromBacklog = backlogTasks.filter((task) => taskBelongsToSprint(task, sprintListId))
+        sprintTasksFromBacklog.forEach(addTask)
+        console.log(`[SprintPlanner] ✓ Found ${sprintTasksFromBacklog.length} tasks in backlog that belong to sprint`)
+      } catch (error) {
+        console.warn(`[SprintPlanner] Warning: Could not fetch backlog tasks:`, error instanceof Error ? error.message : String(error))
+      }
+    }
+
+    // 3. Fetch from team level (as last resort, includes all tasks with locations)
+    // This step is optional and can be disabled during testing as it's very slow
+    if (ENABLE_TEAM_LEVEL_SEARCH) {
+      try {
+        console.log(`[SprintPlanner] [3/3] Fetching tasks from team level (with include_location=true)`)
+        const teamTasks = await fetchTasksFromTeam(teamId, token, sprintListId, 20)
+        teamTasks.forEach(addTask)
+        console.log(`[SprintPlanner] ✓ Found ${teamTasks.length} tasks from team search`)
+      } catch (error) {
+        console.warn(`[SprintPlanner] Warning: Could not fetch team tasks:`, error instanceof Error ? error.message : String(error))
+      }
+    } else {
+      console.log(`[SprintPlanner] [3/3] Skipped (ENABLE_TEAM_LEVEL_SEARCH=false)`)
+    }
+
+    console.log(`[SprintPlanner] Total unique tasks found for sprint: ${allTasks.length}`)
+
+    // Log sample tasks for debugging
+    if (allTasks.length > 0) {
+      const sampleTask = allTasks[0]
+      console.log(`[SprintPlanner] Sample task: "${sampleTask.name}"`, {
+        id: sampleTask.id,
+        listId: sampleTask.list?.id,
+        listName: sampleTask.list?.name,
+        locations: sampleTask.locations?.map((l) => l.list_id || l.id),
+        assignees: sampleTask.assignees?.map((a) => String(a.id)),
+      })
+    }
+
+    // Filter tasks by status first
+    let filtered = allTasks.filter((task) => includeDone || !isDoneStatus(task))
+
+    // Filter by assignee if provided (otherwise return all tasks)
+    if (assigneeId) {
+      filtered = filtered.filter((task) => {
         const assigneeIds = (task.assignees || []).map((user) => String(user.id))
         return assigneeIds.includes(String(assigneeId))
       })
-      .map(mapClickUpTask)
+      console.log(`[SprintPlanner] Filtered to ${filtered.length} tasks for assignee ${assigneeId} out of ${allTasks.length} total sprint tasks`)
+    } else {
+      console.log(`[SprintPlanner] Returning all ${filtered.length} tasks for sprint (no assignee filter)`)
+    }
 
-    const sprintMeta = await getSprintMeta(sprintId)
+    // Map to PlannerTask format
+    const mappedTasks = filtered.map(mapClickUpTask)
 
     return NextResponse.json({
       ok: true,
@@ -160,8 +396,9 @@ export async function GET(request: NextRequest) {
             firstMonday: sprintMeta.firstMonday,
           }
         : { id: sprintId },
-      tasks: filtered,
-      count: filtered.length,
+      tasks: mappedTasks,
+      count: mappedTasks.length,
+      totalSprintTasks: allTasks.length, // Include total count for reference
     })
   } catch (error) {
     console.error("[SprintPlanner] Unexpected error loading tasks:", error)

@@ -1,10 +1,16 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type SVGProps } from "react"
 
 import { AppHeader } from "@/components/AppHeader"
 import { loadSprintConfigFromFirebase, type SprintConfig } from "@/lib/firebaseSprintConfig"
 import { loadTeamMembersFromFirebase, type TeamMember } from "@/lib/firebaseTeamMembers"
+
+const ChevronDownIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+)
 
 type PlannerTask = {
   id: string
@@ -61,7 +67,6 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
   const [selectedMemberId, setSelectedMemberId] = useState<string>("")
   const [selectedSprintId, setSelectedSprintId] = useState<string>("")
 
-  const [tasks, setTasks] = useState<PlannerTask[]>([])
   const [tasksLoading, setTasksLoading] = useState(false)
   const [tasksError, setTasksError] = useState<string | null>(null)
   const [remoteSprintMeta, setRemoteSprintMeta] = useState<Partial<SprintConfig> | null>(null)
@@ -109,11 +114,13 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
       .then((data) => {
         if (!active) return
         const sprintsArray = data?.sprints ? Object.values(data.sprints) : []
+        // Sort by startDate descending (most recent first) for display purposes
         const sorted = sprintsArray.sort((a, b) => {
           const aDate = a.startDate || 0
           const bDate = b.startDate || 0
           return bDate - aDate
         })
+        console.log(`[SprintAgenda] Loaded ${sorted.length} sprints, first sprint: ${sorted[0]?.name}`)
         setSprints(sorted)
       })
       .catch((error) => {
@@ -140,13 +147,66 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     if (!selectedSprintId && sprints.length > 0) {
+      const now = Date.now()
+      
+      // 1. Find the current sprint (where current date is between startDate and endDate)
+      const currentSprint = sprints.find((sprint) => {
+        if (!sprint.startDate || !sprint.endDate) return false
+        return sprint.startDate <= now && sprint.endDate >= now
+      })
+
+      if (currentSprint) {
+        console.log(`[SprintAgenda] Found current sprint: ${currentSprint.name}`)
+        setSelectedSprintId(currentSprint.id)
+        return
+      }
+
+      // 2. If no current sprint, find the next upcoming sprint (future)
+      const upcomingSprints = sprints.filter((sprint) => {
+        if (!sprint.startDate) return false
+        return sprint.startDate > now
+      }).sort((a, b) => (a.startDate || 0) - (b.startDate || 0))
+
+      if (upcomingSprints.length > 0) {
+        console.log(`[SprintAgenda] Found upcoming sprint: ${upcomingSprints[0].name}`)
+        setSelectedSprintId(upcomingSprints[0].id)
+        return
+      }
+
+      // 3. If no upcoming sprint, find the most recent past sprint (ended most recently)
+      const pastSprints = sprints.filter((sprint) => {
+        if (!sprint.endDate) return false
+        return sprint.endDate < now
+      }).sort((a, b) => (b.endDate || 0) - (a.endDate || 0))
+
+      if (pastSprints.length > 0) {
+        console.log(`[SprintAgenda] Found most recent past sprint: ${pastSprints[0].name}`)
+        setSelectedSprintId(pastSprints[0].id)
+        return
+      }
+
+      // 4. Fallback: use first sprint if nothing else found
+      console.log(`[SprintAgenda] Using fallback sprint: ${sprints[0].name}`)
       setSelectedSprintId(sprints[0].id)
     }
   }, [sprints, selectedSprintId])
 
+  // State to store ALL tasks for the current sprint (before filtering by assignee)
+  const [allSprintTasks, setAllSprintTasks] = useState<PlannerTask[]>([])
+
+  // Tasks filtered by selected member - computed automatically from allSprintTasks
+  // This eliminates the need for useEffect and prevents race conditions
+  const tasks = useMemo(() => {
+    if (!selectedMemberId) {
+      return []
+    }
+    return allSprintTasks.filter((task) => task.assigneeIds.includes(selectedMemberId))
+  }, [allSprintTasks, selectedMemberId])
+
+  // Fetch ALL tasks when sprint changes (without assignee filter)
   useEffect(() => {
-    if (!selectedMemberId || !selectedSprintId) {
-      setTasks([])
+    if (!selectedSprintId) {
+      setAllSprintTasks([])
       return
     }
 
@@ -156,10 +216,13 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
     setRemoteSprintMeta(null)
     setDrawerTask(null)
 
+    // Fetch ALL tasks for the sprint (no assigneeId)
     const params = new URLSearchParams({
       sprintId: selectedSprintId,
-      assigneeId: selectedMemberId,
+      // No assigneeId - we want ALL tasks
     })
+
+    console.log(`[SprintAgenda] Fetching ALL tasks for sprint: ${selectedSprintId}`)
 
     fetch(`/api/clickup/sprint-planner?${params.toString()}`, {
       signal: controller.signal,
@@ -169,15 +232,17 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
         if (!response.ok || !data.ok) {
           throw new Error(data?.message || "No pudimos cargar las tareas desde ClickUp.")
         }
-        setTasks(Array.isArray(data.tasks) ? data.tasks : [])
+        const allTasks = Array.isArray(data.tasks) ? data.tasks : []
+        setAllSprintTasks(allTasks)
         setRemoteSprintMeta(data.sprint || null)
+        console.log(`[SprintAgenda] Loaded ${allTasks.length} total tasks for sprint`)
       })
       .catch((error) => {
         if (controller.signal.aborted) {
           return
         }
         console.error("[SprintAgenda] Failed to load tasks:", error)
-        setTasks([])
+        setAllSprintTasks([])
         setTasksError(error instanceof Error ? error.message : "No pudimos cargar las tareas.")
       })
       .finally(() => {
@@ -189,7 +254,9 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
     return () => {
       controller.abort()
     }
-  }, [selectedMemberId, selectedSprintId])
+  }, [selectedSprintId]) // Only depend on sprintId, not memberId
+
+  // Tasks are now computed automatically via useMemo above - no useEffect needed!
 
   useEffect(() => {
     if (!drawerTask) {
@@ -310,7 +377,12 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
           },
           task.name
         )
-        setTasks((prev) => prev.map((t) => (t.id === taskId ? updatedTask : t)))
+        
+        // Simply update allSprintTasks - tasks will be recalculated automatically via useMemo
+        setAllSprintTasks((prev) => {
+          return prev.map((t) => (t.id === taskId ? updatedTask : t))
+        })
+        
         setBanner({ type: "success", message: "Tarea actualizada en ClickUp." })
       } catch (error) {
         console.error("[SprintAgenda] Failed to move task:", error)
@@ -323,7 +395,7 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
         setDraggingTaskId(null)
       }
     },
-    [tasks, updateTaskOnServer, setTaskPending]
+    [tasks, updateTaskOnServer, setTaskPending, selectedMemberId]
   )
 
   const handleDrawerSave = useCallback(
@@ -335,6 +407,8 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
       setDrawerError(null)
       try {
         const timestamp = payload.dayKey === UNPLANNED_KEY ? null : keyToTimestamp(payload.dayKey)
+        
+        // Save to ClickUp (same as handleTaskMove does)
         const updatedTask = await updateTaskOnServer(
           drawerTask.id,
           {
@@ -348,7 +422,50 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
           },
           payload.name
         )
-        setTasks((prev) => prev.map((task) => (task.id === drawerTask.id ? updatedTask : task)))
+        
+        console.log("[SprintAgenda] handleDrawerSave - Original task:", {
+          id: drawerTask.id,
+          assigneeIds: drawerTask.assigneeIds,
+          selectedMemberId,
+        })
+        
+        console.log("[SprintAgenda] handleDrawerSave - Updated task from server:", {
+          id: updatedTask.id,
+          assigneeIds: updatedTask.assigneeIds,
+          selectedMemberId,
+          willBeVisible: updatedTask.assigneeIds?.includes(selectedMemberId),
+        })
+        
+        // Preserve assigneeIds from original task to prevent task from disappearing
+        // ClickUp might return only the assignee we sent, losing other assignees
+        // We merge: use updated assignees if they exist and include selectedMemberId, otherwise keep original
+        const preservedAssignees = 
+          updatedTask.assigneeIds && 
+          updatedTask.assigneeIds.length > 0 && 
+          updatedTask.assigneeIds.includes(selectedMemberId)
+            ? updatedTask.assigneeIds
+            : drawerTask.assigneeIds // Always fallback to original if updated doesn't include current member
+        
+        const taskWithAssignees = {
+          ...updatedTask,
+          assigneeIds: preservedAssignees,
+        }
+        
+        console.log("[SprintAgenda] handleDrawerSave - Final task with preserved assignees:", {
+          assigneeIds: taskWithAssignees.assigneeIds,
+          willBeVisible: taskWithAssignees.assigneeIds.includes(selectedMemberId),
+        })
+        
+        // Update allSprintTasks exactly like handleTaskMove does
+        // The useMemo will automatically recalculate tasks, so the task will move to the correct day
+        setAllSprintTasks((prev) => {
+          const updated = prev.map((t) => (t.id === drawerTask.id ? taskWithAssignees : t))
+          console.log("[SprintAgenda] handleDrawerSave - Updated allSprintTasks, total tasks:", updated.length)
+          const filteredCount = updated.filter((t) => t.assigneeIds.includes(selectedMemberId)).length
+          console.log("[SprintAgenda] handleDrawerSave - Tasks visible for member:", filteredCount)
+          return updated
+        })
+        
         setDrawerTask(null)
         setBanner({ type: "success", message: "Tarea editada y sincronizada." })
       } catch (error) {
@@ -373,35 +490,45 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
             <div className="grid gap-6 md:grid-cols-2">
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-zinc-600">Persona</label>
-                <select
-                  value={selectedMemberId}
-                  onChange={(event) => setSelectedMemberId(event.target.value)}
-                  disabled={membersLoading || members.length === 0}
-                  className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-base text-zinc-900 shadow-sm focus:border-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 disabled:cursor-not-allowed disabled:bg-zinc-100"
-                >
-                  {members.length === 0 && <option value="">Sin miembros disponibles</option>}
-                  {members.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name} {member.howToAddress.length > 0 ? `(${member.howToAddress[0]})` : ""}
-                    </option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <select
+                    value={selectedMemberId}
+                    onChange={(event) => setSelectedMemberId(event.target.value)}
+                    disabled={membersLoading || members.length === 0}
+                    className="w-full appearance-none rounded-2xl border border-zinc-200 bg-white px-4 py-3 pr-12 text-base text-zinc-900 shadow-sm focus:border-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 disabled:cursor-not-allowed disabled:bg-zinc-100"
+                  >
+                    {members.length === 0 && <option value="">Sin miembros disponibles</option>}
+                    {members.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name} {member.howToAddress.length > 0 ? `(${member.howToAddress[0]})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-zinc-500">
+                    <ChevronDownIcon className="h-5 w-5" />
+                  </div>
+                </div>
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-zinc-600">Sprint</label>
-                <select
-                  value={selectedSprintId}
-                  onChange={(event) => setSelectedSprintId(event.target.value)}
-                  disabled={sprintsLoading || sprints.length === 0}
-                  className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-base text-zinc-900 shadow-sm focus:border-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 disabled:cursor-not-allowed disabled:bg-zinc-100"
-                >
-                  {sprints.length === 0 && <option value="">Sin sprints disponibles</option>}
-                  {sprints.map((sprint) => (
-                    <option key={sprint.id} value={sprint.id}>
-                      {sprint.name}
-                    </option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <select
+                    value={selectedSprintId}
+                    onChange={(event) => setSelectedSprintId(event.target.value)}
+                    disabled={sprintsLoading || sprints.length === 0}
+                    className="w-full appearance-none rounded-2xl border border-zinc-200 bg-white px-4 py-3 pr-12 text-base text-zinc-900 shadow-sm focus:border-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 disabled:cursor-not-allowed disabled:bg-zinc-100"
+                  >
+                    {sprints.length === 0 && <option value="">Sin sprints disponibles</option>}
+                    {sprints.map((sprint) => (
+                      <option key={sprint.id} value={sprint.id}>
+                        {sprint.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-zinc-500">
+                    <ChevronDownIcon className="h-5 w-5" />
+                  </div>
+                </div>
               </div>
             </div>
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
