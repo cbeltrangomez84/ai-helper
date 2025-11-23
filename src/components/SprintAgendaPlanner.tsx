@@ -28,6 +28,14 @@ type PlannerTask = {
   listName: string | null
 }
 
+type TaskSegment = {
+  task: PlannerTask
+  dayKey: string
+  hours: number // Hours allocated to this specific day
+  isStart: boolean // Is this the first day of the task?
+  isEnd: boolean // Is this the last day of the task?
+}
+
 type SprintDay = {
   key: string
   label: string
@@ -286,26 +294,40 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
   const { dayBuckets, unplannedTasks } = useMemo(() => {
     const buckets = sprintDays.map((day) => ({
       day,
-      tasks: [] as PlannerTask[],
+      segments: [] as TaskSegment[],
     }))
-    const bucketMap = new Map<string, PlannerTask[]>()
+    const bucketMap = new Map<string, TaskSegment[]>()
     buckets.forEach(({ day }) => bucketMap.set(day.key, []))
 
     const unplanned: PlannerTask[] = []
+    const processedTaskIds = new Set<string>()
+
     tasks.forEach((task) => {
-      const key = getTaskDayKey(task)
-      const bucket = bucketMap.get(key)
-      if (bucket) {
-        bucket.push(task)
-      } else {
+      // Create segments for tasks that span multiple days
+      const segments = createTaskSegments(task, sprintDays)
+      
+      if (segments.length === 0) {
+        // Task has no valid days, add to unplanned
         unplanned.push(task)
+        return
       }
+
+      // Add each segment to its corresponding day bucket
+      segments.forEach((segment) => {
+        const bucket = bucketMap.get(segment.dayKey)
+        if (bucket) {
+          bucket.push(segment)
+        }
+      })
+
+      // Track that we've processed this task
+      processedTaskIds.add(task.id)
     })
 
     return {
       dayBuckets: buckets.map(({ day }) => ({
         day,
-        tasks: bucketMap.get(day.key) ?? [],
+        segments: bucketMap.get(day.key) ?? [],
       })),
       unplannedTasks: unplanned,
     }
@@ -329,8 +351,8 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
   // Calculate hours per day for weekdays only (Monday to Friday)
   const weekdayHours = useMemo(() => {
     const weekdayBuckets = dayBuckets.slice(0, 5) // Only Monday to Friday (first 5 days)
-    return weekdayBuckets.map(({ day, tasks: dayTasks }) => {
-      const hours = dayTasks.reduce((sum, task) => sum + msToHours(task.timeEstimate), 0)
+    return weekdayBuckets.map(({ day, segments }) => {
+      const hours = segments.reduce((sum, segment) => sum + segment.hours, 0)
       return {
         day,
         hours,
@@ -673,66 +695,66 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
 
                 <div className="overflow-x-auto pb-3">
                   <div className="flex min-w-full gap-4">
-                    {dayBuckets.slice(0, 5).map(({ day, tasks: dayTasks }) => (
-                      <div
-                        key={day.key}
-                        onDragOver={(event) => {
-                          event.preventDefault()
-                          event.dataTransfer.dropEffect = "move"
-                        }}
-                        onDrop={(event) => {
-                          event.preventDefault()
-                          if (draggingTaskId) {
-                            handleTaskMove(draggingTaskId, day.key)
-                          }
-                        }}
-                        className={`flex min-w-[260px] flex-col rounded-3xl border ${
-                          draggingTaskId ? "border-zinc-900/30" : "border-zinc-200"
-                        } bg-white p-4 shadow-[0_10px_45px_rgba(0,0,0,0.08)]`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{formatWeekdayLabel(day.date)}</p>
-                            <p className="text-lg font-semibold text-zinc-900">{day.label}</p>
-                          </div>
-                          {(() => {
-                            const dayHours = dayTasks.reduce((sum, task) => sum + msToHours(task.timeEstimate), 0)
-                            const colorClass = getHoursColor(dayHours)
-                            return (
-                              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${colorClass}`}>
-                                {dayHours.toFixed(1)} h
-                              </span>
-                            )
-                          })()}
-                        </div>
-                        <div className="mt-4 flex flex-1 flex-col gap-3">
-                          {dayTasks.length === 0 ? (
-                            <div className="flex flex-1 items-center justify-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 p-4 text-center text-sm text-zinc-500">
-                              Suelta tareas aquí
+                    {dayBuckets.slice(0, 5).map(({ day, segments: daySegments }) => {
+                      const dayHours = daySegments.reduce((sum, segment) => sum + segment.hours, 0)
+                      const colorClass = getHoursColor(dayHours)
+                      
+                      return (
+                        <div
+                          key={day.key}
+                          onDragOver={(event) => {
+                            event.preventDefault()
+                            event.dataTransfer.dropEffect = "move"
+                          }}
+                          onDrop={(event) => {
+                            event.preventDefault()
+                            if (draggingTaskId) {
+                              handleTaskMove(draggingTaskId, day.key)
+                            }
+                          }}
+                          className={`flex min-w-[260px] flex-col rounded-3xl border ${
+                            draggingTaskId ? "border-zinc-900/30" : "border-zinc-200"
+                          } bg-white p-4 shadow-[0_10px_45px_rgba(0,0,0,0.08)]`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{formatWeekdayLabel(day.date)}</p>
+                              <p className="text-lg font-semibold text-zinc-900">{day.label}</p>
                             </div>
-                          ) : (
-                            dayTasks.map((task) => (
-                              <TaskCard
-                                key={task.id}
-                                task={task}
-                                sprintDays={sprintDays}
-                                extraDayKeySet={dayKeySet}
-                                pending={Boolean(pendingTaskIds[task.id])}
-                                isDragging={draggingTaskId === task.id}
-                                onSelectDay={(value) => handleTaskMove(task.id, value)}
-                                onOpen={() => setDrawerTask(task)}
-                                onDragStart={() => {
-                                  if (!pendingTaskIds[task.id]) {
-                                    setDraggingTaskId(task.id)
-                                  }
-                                }}
-                                onDragEnd={() => setDraggingTaskId(null)}
-                              />
-                            ))
-                          )}
+                            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${colorClass}`}>
+                              {dayHours.toFixed(1)} h
+                            </span>
+                          </div>
+                          <div className="mt-4 flex flex-1 flex-col gap-3">
+                            {daySegments.length === 0 ? (
+                              <div className="flex flex-1 items-center justify-center rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 p-4 text-center text-sm text-zinc-500">
+                                Suelta tareas aquí
+                              </div>
+                            ) : (
+                              daySegments.map((segment) => (
+                                <TaskCard
+                                  key={`${segment.task.id}-${segment.dayKey}`}
+                                  task={segment.task}
+                                  segment={segment}
+                                  sprintDays={sprintDays}
+                                  extraDayKeySet={dayKeySet}
+                                  pending={Boolean(pendingTaskIds[segment.task.id])}
+                                  isDragging={draggingTaskId === segment.task.id}
+                                  onSelectDay={(value) => handleTaskMove(segment.task.id, value)}
+                                  onOpen={() => setDrawerTask(segment.task)}
+                                  onDragStart={() => {
+                                    if (!pendingTaskIds[segment.task.id]) {
+                                      setDraggingTaskId(segment.task.id)
+                                    }
+                                  }}
+                                  onDragEnd={() => setDraggingTaskId(null)}
+                                />
+                              ))
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </div>
               </section>
@@ -809,6 +831,7 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
 
 function TaskCard({
   task,
+  segment,
   sprintDays,
   extraDayKeySet,
   pending,
@@ -819,6 +842,7 @@ function TaskCard({
   onDragEnd,
 }: {
   task: PlannerTask
+  segment?: TaskSegment
   sprintDays: SprintDay[]
   extraDayKeySet: Set<string>
   pending: boolean
@@ -828,8 +852,9 @@ function TaskCard({
   onDragStart: () => void
   onDragEnd: () => void
 }) {
-  const hours = msToHours(task.timeEstimate)
-  const dayKey = getTaskDayKey(task)
+  // Use segment hours if available, otherwise use full task hours
+  const hours = segment ? segment.hours : msToHours(task.timeEstimate)
+  const dayKey = segment ? segment.dayKey : getTaskDayKey(task)
   const hasCustomDay = dayKey !== UNPLANNED_KEY && !extraDayKeySet.has(dayKey)
 
   return (
@@ -844,11 +869,16 @@ function TaskCard({
       } ${isDragging ? "ring-2 ring-emerald-400/70" : ""}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="flex-1 min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">{task.status || "Sin estado"}</p>
-          <p className="mt-1 text-sm font-medium text-white">{task.name}</p>
+          <p className="mt-1 text-sm font-medium text-white break-words">{task.name}</p>
+          {segment && !segment.isStart && !segment.isEnd && (
+            <p className="mt-1 text-xs text-zinc-400">Continuación</p>
+          )}
         </div>
-        <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-emerald-200">{hours.toFixed(1)} h</span>
+        <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-emerald-200 whitespace-nowrap flex-shrink-0">
+          {hours.toFixed(1)} h
+        </span>
       </div>
       <div className="mt-3 flex flex-col gap-2 text-sm text-zinc-400">
         {task.listName && <p className="text-xs text-zinc-400">{task.listName}</p>}
@@ -1164,6 +1194,61 @@ function getTaskDayKey(task: PlannerTask): string {
     return UNPLANNED_KEY
   }
   return formatDateKey(new Date(task.dueDate))
+}
+
+/**
+ * Calculate which days a task spans based on startDate and dueDate
+ * Returns an array of day keys that the task occupies
+ */
+function getTaskDays(task: PlannerTask, sprintDays: SprintDay[]): string[] {
+  if (!task.startDate || !task.dueDate) {
+    // If no startDate or dueDate, use the old behavior (single day based on dueDate)
+    const key = getTaskDayKey(task)
+    return key === UNPLANNED_KEY ? [] : [key]
+  }
+
+  const start = new Date(task.startDate)
+  const end = new Date(task.dueDate)
+  start.setHours(0, 0, 0, 0)
+  end.setHours(23, 59, 59, 999)
+
+  const days: string[] = []
+  const sprintDayKeys = new Set(sprintDays.map((d) => d.key))
+
+  // Iterate through each day from start to end
+  const current = new Date(start)
+  while (current <= end) {
+    const dayKey = formatDateKey(current)
+    // Only include days that are in the sprint
+    if (sprintDayKeys.has(dayKey)) {
+      days.push(dayKey)
+    }
+    current.setDate(current.getDate() + 1)
+  }
+
+  return days.length > 0 ? days : [getTaskDayKey(task)]
+}
+
+/**
+ * Create segments for a task, dividing it across multiple days
+ */
+function createTaskSegments(task: PlannerTask, sprintDays: SprintDay[]): TaskSegment[] {
+  const days = getTaskDays(task, sprintDays)
+  
+  if (days.length === 0) {
+    return []
+  }
+
+  const totalHours = msToHours(task.timeEstimate)
+  const hoursPerDay = totalHours / days.length
+
+  return days.map((dayKey, index) => ({
+    task,
+    dayKey,
+    hours: hoursPerDay,
+    isStart: index === 0,
+    isEnd: index === days.length - 1,
+  }))
 }
 
 function keyToTimestamp(key: string): number | null {
