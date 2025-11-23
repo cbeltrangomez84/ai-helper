@@ -315,6 +315,30 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
     return tasks.reduce((sum, task) => sum + msToHours(task.timeEstimate), 0)
   }, [tasks])
 
+  // Helper function to get color based on hours
+  const getHoursColor = useCallback((hours: number) => {
+    if (hours < 6.5) {
+      return "bg-green-100 text-green-700" // Verde claro
+    } else if (hours >= 6.5 && hours <= 8) {
+      return "bg-yellow-100 text-yellow-700" // Amarillo
+    } else {
+      return "bg-red-100 text-red-700" // Rojo
+    }
+  }, [])
+
+  // Calculate hours per day for weekdays only (Monday to Friday)
+  const weekdayHours = useMemo(() => {
+    const weekdayBuckets = dayBuckets.slice(0, 5) // Only Monday to Friday (first 5 days)
+    return weekdayBuckets.map(({ day, tasks: dayTasks }) => {
+      const hours = dayTasks.reduce((sum, task) => sum + msToHours(task.timeEstimate), 0)
+      return {
+        day,
+        hours,
+        colorClass: getHoursColor(hours),
+      }
+    })
+  }, [dayBuckets, getHoursColor])
+
   const weekRangeLabel = useMemo(() => {
     if (sprintDays.length === 0) {
       return "Sin fechas definidas"
@@ -550,6 +574,24 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
             </div>
           ) : (
             <>
+              {/* Weekday summary cards (Monday to Friday only) */}
+              <section className="mb-6">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+                  {weekdayHours.map(({ day, hours, colorClass }) => {
+                    const weekdayName = day.date.toLocaleDateString("es-ES", { weekday: "long" })
+                    return (
+                      <div
+                        key={day.key}
+                        className={`rounded-2xl border border-zinc-200 p-3 sm:p-4 ${colorClass}`}
+                      >
+                        <p className="text-xs sm:text-sm font-semibold capitalize">{weekdayName}</p>
+                        <p className="mt-1 text-base sm:text-lg font-bold">({hours.toFixed(1)} h)</p>
+                      </div>
+                    )
+                  })}
+                </div>
+              </section>
+
               <section className="space-y-4">
                 <div className="flex items-center justify-between gap-2">
                   <h2 className="text-lg font-semibold text-zinc-900">Agenda semanal</h2>
@@ -558,7 +600,7 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
 
                 <div className="overflow-x-auto pb-3">
                   <div className="flex min-w-full gap-4">
-                    {dayBuckets.map(({ day, tasks: dayTasks }) => (
+                    {dayBuckets.slice(0, 5).map(({ day, tasks: dayTasks }) => (
                       <div
                         key={day.key}
                         onDragOver={(event) => {
@@ -580,9 +622,15 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
                             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{formatWeekdayLabel(day.date)}</p>
                             <p className="text-lg font-semibold text-zinc-900">{day.label}</p>
                           </div>
-                          <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-semibold text-zinc-700">
-                            {dayTasks.reduce((sum, task) => sum + msToHours(task.timeEstimate), 0).toFixed(1)} h
-                          </span>
+                          {(() => {
+                            const dayHours = dayTasks.reduce((sum, task) => sum + msToHours(task.timeEstimate), 0)
+                            const colorClass = getHoursColor(dayHours)
+                            return (
+                              <span className={`rounded-full px-3 py-1 text-xs font-semibold ${colorClass}`}>
+                                {dayHours.toFixed(1)} h
+                              </span>
+                            )
+                          })()}
                         </div>
                         <div className="mt-4 flex flex-1 flex-col gap-3">
                           {dayTasks.length === 0 ? (
