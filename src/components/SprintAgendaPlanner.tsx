@@ -219,14 +219,19 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
     }
 
     const controller = new AbortController()
+    
+    // Clear cache immediately when sprint changes
+    setAllSprintTasks([])
     setTasksLoading(true)
     setTasksError(null)
     setRemoteSprintMeta(null)
     setDrawerTask(null)
 
     // Fetch ALL tasks for the sprint (no assigneeId)
+    // Add cache-busting timestamp to prevent browser cache
     const params = new URLSearchParams({
       sprintId: selectedSprintId,
+      _t: Date.now().toString(), // Cache-busting parameter
       // No assigneeId - we want ALL tasks
     })
 
@@ -234,6 +239,7 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
 
     fetch(`/api/clickup/sprint-planner?${params.toString()}`, {
       signal: controller.signal,
+      cache: "no-store", // Prevent browser caching
     })
       .then(async (response) => {
         const data = await response.json()
@@ -261,8 +267,20 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
 
     return () => {
       controller.abort()
+      // Clear cache when component unmounts or sprint changes
+      setAllSprintTasks([])
     }
   }, [selectedSprintId]) // Only depend on sprintId, not memberId
+
+  // Cleanup: Clear all cache when component unmounts (user leaves the screen)
+  useEffect(() => {
+    return () => {
+      console.log("[SprintAgenda] Component unmounting - clearing cache")
+      setAllSprintTasks([])
+      setDrawerTask(null)
+      setBanner(null)
+    }
+  }, [])
 
   // Tasks are now computed automatically via useMemo above - no useEffect needed!
 
