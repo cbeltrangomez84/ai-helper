@@ -149,7 +149,9 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     if (!selectedMemberId && members.length > 0) {
-      setSelectedMemberId(members[0].id)
+      // Default to Carlos Beltrán if available, otherwise use first member
+      const carlosBeltran = members.find((m) => m.name.toLowerCase().includes("carlos") && m.name.toLowerCase().includes("beltrán"))
+      setSelectedMemberId(carlosBeltran?.id || members[0].id)
     }
   }, [members, selectedMemberId])
 
@@ -505,19 +507,44 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
           payload.name
         )
         
-        // Preserve assigneeIds from original task to prevent task from disappearing
-        // ClickUp might return only the assignee we sent, losing other assignees
-        // We merge: use updated assignees if they exist and include selectedMemberId, otherwise keep original
-        const preservedAssignees = 
-          updatedTask.assigneeIds && 
-          updatedTask.assigneeIds.length > 0 && 
-          updatedTask.assigneeIds.includes(selectedMemberId)
-            ? updatedTask.assigneeIds
-            : drawerTask.assigneeIds // Always fallback to original if updated doesn't include current member
+        // Check if assigneeId was explicitly changed by comparing with original task
+        // We always send assigneeId in the payload, so we need to check if it's different
+        const originalAssigneeId = drawerTask.assigneeIds[0] || null
+        const newAssigneeId = payload.assigneeId || null
+        const wasAssigneeChanged = originalAssigneeId !== newAssigneeId
+        
+        let finalAssignees: string[]
+        if (wasAssigneeChanged) {
+          // User explicitly changed the assignee - use what ClickUp returned
+          // If ClickUp didn't return assignees, use the one we sent
+          finalAssignees = updatedTask.assigneeIds && updatedTask.assigneeIds.length > 0 
+            ? updatedTask.assigneeIds 
+            : (payload.assigneeId ? [payload.assigneeId] : [])
+          console.log("[SprintAgenda] Assignee was changed - using server response:", {
+            originalAssigneeId,
+            newAssigneeId: payload.assigneeId,
+            oldAssignees: drawerTask.assigneeIds,
+            newAssignees: finalAssignees,
+            serverReturnedAssignees: updatedTask.assigneeIds,
+          })
+        } else {
+          // Assignee wasn't changed - preserve assigneeIds to prevent task from disappearing
+          // ClickUp might return only the assignee we sent, losing other assignees
+          finalAssignees = 
+            updatedTask.assigneeIds && 
+            updatedTask.assigneeIds.length > 0 && 
+            updatedTask.assigneeIds.includes(selectedMemberId)
+              ? updatedTask.assigneeIds
+              : drawerTask.assigneeIds // Always fallback to original if updated doesn't include current member
+          console.log("[SprintAgenda] Assignee was NOT changed - preserving original assignees:", {
+            originalAssignees: drawerTask.assigneeIds,
+            finalAssignees,
+          })
+        }
         
         const taskWithAssignees = {
           ...updatedTask,
-          assigneeIds: preservedAssignees,
+          assigneeIds: finalAssignees,
         }
         
         // Update allSprintTasks exactly like handleTaskMove does

@@ -467,11 +467,62 @@ export async function PATCH(request: NextRequest) {
       })
     }
 
+    // Handle assignees using ClickUp's correct format: {add: [], rem: []}
     if ("assigneeId" in updates) {
-      if (updates.assigneeId) {
-        updateBody.assignees = [updates.assigneeId]
+      // First, fetch current task to get existing assignees
+      const currentTaskResponse = await fetch(`${CLICKUP_API_BASE}/task/${payload.taskId}`, {
+        headers: {
+          Authorization: token,
+        },
+        cache: "no-store",
+      })
+
+      if (!currentTaskResponse.ok) {
+        console.warn("[SprintPlanner] Failed to fetch current task for assignees, will use simple format")
       } else {
-        updateBody.assignees = []
+        const currentTask = (await currentTaskResponse.json()) as ClickUpTask
+        const currentAssigneeIds = (currentTask.assignees || []).map((a) => Number(a.id))
+        const newAssigneeId = updates.assigneeId ? Number(updates.assigneeId) : null
+
+        console.log("[SprintPlanner] PATCH - Current assignees:", {
+          currentAssigneeIds,
+          newAssigneeId,
+        })
+
+        // Build add/rem arrays
+        const addIds: number[] = []
+        const remIds: number[] = []
+
+        if (newAssigneeId) {
+          // Add new assignee if not already assigned
+          if (!currentAssigneeIds.includes(newAssigneeId)) {
+            addIds.push(newAssigneeId)
+          }
+          // Remove all current assignees except the new one
+          currentAssigneeIds.forEach((id) => {
+            if (id !== newAssigneeId) {
+              remIds.push(id)
+            }
+          })
+        } else {
+          // Clearing assignees - remove all current ones
+          remIds.push(...currentAssigneeIds)
+        }
+
+        // Only set assignees if there are changes
+        if (addIds.length > 0 || remIds.length > 0) {
+          updateBody.assignees = {
+            ...(addIds.length > 0 && { add: addIds }),
+            ...(remIds.length > 0 && { rem: remIds }),
+          }
+          console.log("[SprintPlanner] PATCH - Setting assignees (ClickUp format):", {
+            assignees: updateBody.assignees,
+            addIds,
+            remIds,
+          })
+        } else {
+          console.log("[SprintPlanner] PATCH - No assignee changes needed")
+        }
       }
     }
 
@@ -500,11 +551,45 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ ok: false, message: "Failed to update ClickUp task." }, { status: response.status })
     }
 
-    const updatedTask = (await response.json()) as ClickUpTask
+    // Read PUT response
+    const putResponseData = (await response.json()) as ClickUpTask
+    console.log("[SprintPlanner] PATCH - PUT response:", {
+      taskId: putResponseData.id,
+      assignees: putResponseData.assignees?.map((a) => String(a.id)),
+      assigneesCount: putResponseData.assignees?.length || 0,
+    })
+
+    // Fetch updated task to get complete data (especially assignees)
+    // ClickUp PUT response might not include all fields
+    let updatedTask: ClickUpTask = putResponseData
+    
+    try {
+      const getResponse = await fetch(`${CLICKUP_API_BASE}/task/${payload.taskId}`, {
+        headers: {
+          Authorization: token,
+        },
+        cache: "no-store",
+      })
+
+      if (getResponse.ok) {
+        updatedTask = (await getResponse.json()) as ClickUpTask
+        console.log("[SprintPlanner] PATCH - GET response after PUT:", {
+          assignees: updatedTask.assignees?.map((a) => String(a.id)),
+          assigneesCount: updatedTask.assignees?.length || 0,
+        })
+      } else {
+        console.warn("[SprintPlanner] GET after PUT failed, using PUT response")
+      }
+    } catch (error) {
+      console.warn("[SprintPlanner] Failed to fetch task after PUT:", error)
+    }
+
+    const mappedTask = mapClickUpTask(updatedTask)
+    console.log("[SprintPlanner] PATCH - Final mapped task assigneeIds:", mappedTask.assigneeIds)
 
     return NextResponse.json({
       ok: true,
-      task: mapClickUpTask(updatedTask),
+      task: mappedTask,
     })
   } catch (error) {
     console.error("[SprintPlanner] Unexpected error updating task:", error)
