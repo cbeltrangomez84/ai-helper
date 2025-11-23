@@ -423,19 +423,6 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
           payload.name
         )
         
-        console.log("[SprintAgenda] handleDrawerSave - Original task:", {
-          id: drawerTask.id,
-          assigneeIds: drawerTask.assigneeIds,
-          selectedMemberId,
-        })
-        
-        console.log("[SprintAgenda] handleDrawerSave - Updated task from server:", {
-          id: updatedTask.id,
-          assigneeIds: updatedTask.assigneeIds,
-          selectedMemberId,
-          willBeVisible: updatedTask.assigneeIds?.includes(selectedMemberId),
-        })
-        
         // Preserve assigneeIds from original task to prevent task from disappearing
         // ClickUp might return only the assignee we sent, losing other assignees
         // We merge: use updated assignees if they exist and include selectedMemberId, otherwise keep original
@@ -451,19 +438,10 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
           assigneeIds: preservedAssignees,
         }
         
-        console.log("[SprintAgenda] handleDrawerSave - Final task with preserved assignees:", {
-          assigneeIds: taskWithAssignees.assigneeIds,
-          willBeVisible: taskWithAssignees.assigneeIds.includes(selectedMemberId),
-        })
-        
         // Update allSprintTasks exactly like handleTaskMove does
         // The useMemo will automatically recalculate tasks, so the task will move to the correct day
         setAllSprintTasks((prev) => {
-          const updated = prev.map((t) => (t.id === drawerTask.id ? taskWithAssignees : t))
-          console.log("[SprintAgenda] handleDrawerSave - Updated allSprintTasks, total tasks:", updated.length)
-          const filteredCount = updated.filter((t) => t.assigneeIds.includes(selectedMemberId)).length
-          console.log("[SprintAgenda] handleDrawerSave - Tasks visible for member:", filteredCount)
-          return updated
+          return prev.map((t) => (t.id === drawerTask.id ? taskWithAssignees : t))
         })
         
         setDrawerTask(null)
