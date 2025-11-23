@@ -453,19 +453,37 @@ export function SprintAgendaPlanner({ onBack }: { onBack: () => void }) {
       setDrawerError(null)
       try {
         const timestamp = payload.dayKey === UNPLANNED_KEY ? null : keyToTimestamp(payload.dayKey)
+        const timeEstimateMs = hoursToMs(payload.hours)
+        
+        const updatesToSend = {
+          name: payload.name,
+          objective: payload.objective,
+          acceptanceCriteria: payload.acceptanceCriteria,
+          assigneeId: payload.assigneeId,
+          dueDate: timestamp,
+          startDate: timestamp,
+          timeEstimateMs: timeEstimateMs,
+        }
+        
+        console.log("[SprintAgenda] handleDrawerSave - Sending updates to ClickUp:", {
+          taskId: drawerTask.id,
+          currentName: payload.name,
+          updates: {
+            ...updatesToSend,
+            timeEstimateMs: timeEstimateMs,
+            timeEstimateMsFormatted: timeEstimateMs !== null ? `${timeEstimateMs}ms (${payload.hours}h)` : "null",
+          },
+          payload: {
+            hours: payload.hours,
+            hoursType: typeof payload.hours,
+            hoursToMsResult: timeEstimateMs,
+          },
+        })
         
         // Save to ClickUp (same as handleTaskMove does)
         const updatedTask = await updateTaskOnServer(
           drawerTask.id,
-          {
-            name: payload.name,
-            objective: payload.objective,
-            acceptanceCriteria: payload.acceptanceCriteria,
-            assigneeId: payload.assigneeId,
-            dueDate: timestamp,
-            startDate: timestamp,
-            timeEstimateMs: hoursToMs(payload.hours),
-          },
+          updatesToSend,
           payload.name
         )
         

@@ -421,6 +421,20 @@ export async function PATCH(request: NextRequest) {
   try {
     const token = getClickUpToken()
     const { updates } = payload
+    
+    console.log("[SprintPlanner] PATCH - Received update request:", {
+      taskId: payload.taskId,
+      currentName: payload.currentName,
+      updates: {
+        ...updates,
+        timeEstimateMs: updates.timeEstimateMs,
+        timeEstimateMsType: typeof updates.timeEstimateMs,
+        timeEstimateMsFormatted: updates.timeEstimateMs !== null && updates.timeEstimateMs !== undefined 
+          ? `${updates.timeEstimateMs}ms (${updates.timeEstimateMs / 3_600_000}h)` 
+          : "null/undefined",
+      },
+    })
+    
     const updateBody: Record<string, unknown> = {}
 
     if (typeof updates.name === "string") {
@@ -443,7 +457,14 @@ export async function PATCH(request: NextRequest) {
     }
 
     if ("timeEstimateMs" in updates) {
-      updateBody.time_estimate = typeof updates.timeEstimateMs === "number" ? updates.timeEstimateMs : null
+      const timeEstimateValue = typeof updates.timeEstimateMs === "number" ? updates.timeEstimateMs : null
+      updateBody.time_estimate = timeEstimateValue
+      console.log("[SprintPlanner] PATCH - Setting time_estimate:", {
+        timeEstimateMs: updates.timeEstimateMs,
+        timeEstimateValue,
+        willSendToClickUp: timeEstimateValue,
+        formatted: timeEstimateValue !== null ? `${timeEstimateValue}ms (${timeEstimateValue / 3_600_000}h)` : "null",
+      })
     }
 
     if ("assigneeId" in updates) {
@@ -457,6 +478,12 @@ export async function PATCH(request: NextRequest) {
     if (Object.keys(updateBody).length === 0) {
       return NextResponse.json({ ok: false, message: "No valid fields provided for update." }, { status: 400 })
     }
+
+    console.log("[SprintPlanner] PATCH - Sending to ClickUp API:", {
+      url: `${CLICKUP_API_BASE}/task/${payload.taskId}`,
+      updateBody,
+      updateBodyKeys: Object.keys(updateBody),
+    })
 
     const response = await fetch(`${CLICKUP_API_BASE}/task/${payload.taskId}`, {
       method: "PUT",
